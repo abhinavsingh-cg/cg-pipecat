@@ -6,7 +6,9 @@ FRAME FLOW (downstream, left → right):
     → EventLogger("input")      # logs VAD / speaking / interruption events
     → [LIDProcessor]            # optional SpeechBrain language ID on raw audio
     → stt                       # VAD-gated: buffers audio, fires TranscriptionFrame
+    → TextNormalizationProcessor # digits → words; logs raw/stt_lang/current_lang/normalized
     → LanguageSuffixProcessor   # text-level LID fallback + language-switch hysteresis
+                                #   (skips LID for ≤3-word utterances)
     → RedisUserRecorder         # persist user turn to Redis
     → context_aggr.user()       # accumulates transcript → LLMContext; owns VAD +
                                 #   interruption broadcast (must receive audio frames)

@@ -32,7 +32,10 @@ voicebot/
   processors/
     early_barge_in.py      ≤800 ms interruption stash + Redis trim + prepend on next turn
     language_suffix.py     Hysteresis commit + TTS language update; suffix injection
-                           gated on inject_suffix (true only for in-house STT)
+                           gated on inject_suffix (true only for in-house STT);
+                           short-utterance guard (≤3 words → skip LID, keep current language)
+    text_normalizer.py     Replaces digit sequences with words (num2words) before LLM context;
+                           logs raw transcript, stt_lang, current_lang, normalized text at INFO
     are_you_there.py       Idle watchdog with 3-strike EndFrame
     redis_recorder.py      User + assistant Redis writers
 
@@ -57,7 +60,8 @@ voicebot/
 | `stt/lid.py` | SpeechBrain side-channel — replaces the monkey-patched `LIDAwareSTT` from livekit/ |
 | `state/redis_memory.py` | Preserves the `call:{call_id}:data` JSON schema |
 | `processors/early_barge_in.py` | ≤800 ms concat hook (ported from `rtp_processor.py:1015-1019, 2690-2703, 1304-1319`) |
-| `processors/language_suffix.py` | Hysteresis + TTS language update |
+| `processors/language_suffix.py` | Hysteresis + TTS language update; ≤3-word short-utterance guard |
+| `processors/text_normalizer.py` | Digit-to-word normalization (num2words) + transcript INFO logging |
 | `processors/are_you_there.py` | Idle prompts ported from `rtp_processor.py:2572+` |
 | `processors/redis_recorder.py` | Application schema |
 
@@ -88,7 +92,7 @@ conda create -y -n pipecat-voicebot python=3.11
 conda activate pipecat-voicebot
 pip install "pipecat-ai[silero,sarvam,groq,webrtc]" \
     fastapi "uvicorn[standard]" python-json-logger redis aiohttp \
-    langdetect python-dotenv torch torchaudio onnxruntime
+    langdetect python-dotenv torch torchaudio onnxruntime num2words
 ```
 
 For other vendors add the matching extras (`deepgram`, `elevenlabs`, `cartesia`, `aws`, `openai`).
