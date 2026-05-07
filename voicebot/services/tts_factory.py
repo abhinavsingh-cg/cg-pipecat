@@ -1,5 +1,16 @@
 """
-TTS factory — selector returning a stock Pipecat TTSService.
+TTS factory — returns a stock Pipecat TTSService based on TTS_VENDOR.
+
+TO ADD A NEW VENDOR:
+  1. pip install "pipecat-ai[your-vendor]"
+  2. Add a new `if vendor == "yourvendor":` block below.
+  3. Set TTS_VENDOR=yourvendor in .env.
+  4. Add any API key vars to config.py.
+
+LANGUAGE SWITCHING: when the user switches language, pipeline.py calls
+tts.update_options(target_language_code=...) or tts.update_options(language=...).
+Ensure your vendor's TTSService supports one of these kwargs, or extend
+on_language_switch() in pipeline.py to handle vendor-specific update calls.
 """
 from __future__ import annotations
 
@@ -27,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 def _pipecat_language(internal_key: str) -> PipecatLanguage:
+    """Map internal language key (e.g. "hindi") → Pipecat Language enum ("hi")."""
     iso = LANG_TO_ISO.get(internal_key, "hi")
     try:
         return PipecatLanguage(iso)
@@ -35,9 +47,18 @@ def _pipecat_language(internal_key: str) -> PipecatLanguage:
 
 
 def build_tts(language_key: str) -> TTSService:
+    """
+    Returns the configured TTS service, initialized for `language_key`.
+
+    language_key is an internal key like "hindi", "english", "tamil".
+    The factory converts it to the vendor-specific format (ISO code, Pipecat
+    enum, etc.) as needed.
+    """
     vendor = TTS_VENDOR
     if vendor == "sarvam":
         from pipecat.services.sarvam.tts import SarvamTTSService  # type: ignore
+        # voice_id / speaker options: shubh, meera, arvind, amol, amartya, diya
+        # See SARVAM_TTS_SPEAKER in config.py to change the default voice.
         return SarvamTTSService(
             api_key=SARVAM_API_KEY,
             model=SARVAM_TTS_MODEL,
@@ -51,6 +72,9 @@ def build_tts(language_key: str) -> TTSService:
         )
     if vendor == "elevenlabs":
         from pipecat.services.elevenlabs.tts import ElevenLabsTTSService  # type: ignore
+        # ElevenLabs doesn't natively support language switching — the voice
+        # model determines the language. For multilingual calls, pick a
+        # multilingual voice (e.g. "eleven_multilingual_v2").
         return ElevenLabsTTSService(
             api_key=ELEVEN_API_KEY,
             voice_id=ELEVENLABS_VOICE_ID,

@@ -1,13 +1,34 @@
 """
-AsteriskRTPTransport — a Pipecat transport that speaks raw RTP over UDP.
+AsteriskRTPTransport — Pipecat transport over raw UDP/RTP.
 
-Asterisk already terminates SIP and produces μ-law @ 8 kHz / 20 ms RTP. We
-plug the agent in directly via UDP — no LiveKit SIP / Daily / Twilio proxy.
+WHY CUSTOM:
+  Asterisk terminates SIP and produces μ-law @ 8 kHz / 20 ms RTP. We bind
+  a UDP port and exchange RTP directly — no LiveKit SIP / Daily / Twilio hop.
+  Pipecat ships no raw UDP transport so this is custom.
 
-Replaces the entire `RTPProcessor` from credgenics-voice-bot-library
-(rtp_processor.py:893+ — ~2800 lines) with a thin transport. VAD, turn
-detection, audio framing, jitter, and barge-in cancellation are handled
-inside Pipecat once we hand it `InputAudioRawFrame`s.
+SYMMETRIC RTP (NAT traversal):
+  We don't know Asterisk's public IP until it sends us a packet. The input
+  transport auto-learns the remote {ip:port} from the first inbound datagram
+  (_on_remote_learned). The output transport reuses the same socket and sends
+  to that learned address. This is how symmetric RTP NAT traversal works.
+
+FRAME FLOW:
+  AsteriskRTPInputTransport:
+    UDP datagram → parse_rtp_header() → decode_ulaw_to_pcm()
+    → InputAudioRawFrame(audio=pcm_bytes, sample_rate=8000) → pipeline
+
+  AsteriskRTPOutputTransport:
+    OutputAudioRawFrame → (resample if needed) → encode_pcm_to_ulaw()
+    → prepare_ulaw_stream_frames() → build_rtp_packet() → UDP sendto()
+
+CUSTOMIZE:
+  • Change RTP payload type: edit build_rtp_packet() in rtp_codec.py (byte [1]).
+    Currently hardcoded to 0x00 (PCMU / μ-law).
+  • Change SSRC: edit config.py SSRC (arbitrary fixed value, Asterisk ignores it).
+  • Pre-announced remote: pass remote_host + remote_port to AsteriskRTPParams
+    if you know Asterisk's address at startup (skips symmetric-RTP auto-learn).
+  • Jitter buffer: not implemented — if Asterisk jitter is a problem, add an
+    asyncio.Queue-based reorder buffer in _reader_loop().
 """
 from __future__ import annotations
 
@@ -50,8 +71,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AsteriskRTPParams(TransportParams):
-    """Transport params — local UDP bind + remote RTP destination."""
+    """Transport params — local UDP bind + remote RTP destination.
 
+    Set remote_host + remote_port if you know Asterisk's address at startup.
+    Leave them None to use symmetric-RTP auto-learn (most deployments).
+    local_port=0 lets the OS assign a free port; the actual port is published
+    back to self.local_port after bind so Asterisk can be told where to send.
+    """
     local_host: str = "0.0.0.0"
     local_port: int = 0                     # 0 = OS-assigned
     remote_host: Optional[str] = None       # set after Asterisk SDP exchange
@@ -65,29 +91,34 @@ class AsteriskRTPParams(TransportParams):
 
 
 class _RTPDatagramProtocol(asyncio.DatagramProtocol):
-    """Async UDP datagram protocol — pushes inbound RTP onto a queue."""
+    """asyncio UDP protocol — pushes raw datagrams onto an asyncio.Queue."""
 
     def __init__(self, queue: "asyncio.Queue[bytes]", on_remote: Callable[[tuple], None]):
         self._queue = queue
         self._on_remote = on_remote
 
-    def connection_made(self, transport):  # noqa: D401
+    def connection_made(self, transport):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr) -> None:
-        # Auto-learn the remote endpoint on first packet (symmetric RTP).
+        # Learn the sender's address for symmetric RTP.
         self._on_remote(addr)
         try:
             self._queue.put_nowait(data)
         except asyncio.QueueFull:
             logger.warning("RTP input queue full — dropping packet")
 
-    def error_received(self, exc):  # noqa: D401
+    def error_received(self, exc):
         logger.warning("RTP UDP error: %s", exc)
 
 
 class AsteriskRTPInputTransport(BaseInputTransport):
-    """Reads RTP from UDP, μ-law-decodes, emits InputAudioRawFrame."""
+    """
+    Binds a UDP port, reads RTP, μ-law-decodes, emits InputAudioRawFrame.
+
+    The queue (maxsize=200) buffers ~4 seconds of 20 ms packets. If the
+    pipeline falls behind, older packets are dropped (put_nowait raises QueueFull).
+    """
 
     def __init__(self, params: AsteriskRTPParams):
         super().__init__(params)
@@ -99,6 +130,7 @@ class AsteriskRTPInputTransport(BaseInputTransport):
 
     @property
     def remote(self) -> Optional[tuple]:
+        """The auto-learned {ip, port} of the Asterisk RTP stream."""
         return self._learned_remote
 
     async def start(self, frame: StartFrame):
@@ -111,7 +143,8 @@ class AsteriskRTPInputTransport(BaseInputTransport):
         sock: socket.socket = self._datagram_transport.get_extra_info("socket")
         bound_host, bound_port = sock.getsockname()[:2]
         logger.info("AsteriskRTP input bound to %s:%s", bound_host, bound_port)
-        self._params.local_port = bound_port  # publish actual port back
+        # Publish the actual bound port back so the caller can tell Asterisk.
+        self._params.local_port = bound_port
         self._reader_task = asyncio.create_task(self._reader_loop())
 
     async def stop(self, frame: EndFrame):
@@ -139,7 +172,7 @@ class AsteriskRTPInputTransport(BaseInputTransport):
             logger.info("AsteriskRTP learned remote = %s", addr)
 
     async def _reader_loop(self):
-        """Pull RTP datagrams off the queue, push as InputAudioRawFrame."""
+        """Dequeue RTP packets, decode μ-law → PCM, push InputAudioRawFrame."""
         while True:
             packet = await self._queue.get()
             try:
@@ -159,7 +192,13 @@ class AsteriskRTPInputTransport(BaseInputTransport):
 
 
 class AsteriskRTPOutputTransport(BaseOutputTransport):
-    """Receives OutputAudioRawFrame, μ-law-encodes, sends as RTP via UDP."""
+    """
+    Receives OutputAudioRawFrame, μ-law-encodes, sends as RTP via UDP.
+
+    Reuses the input socket (shared via get_socket callback) for symmetric RTP.
+    Maintains a _pending buffer so μ-law frames are always exactly 160 bytes
+    (20 ms) even when TTS emits audio in different chunk sizes.
+    """
 
     def __init__(self, params: AsteriskRTPParams, get_socket: Callable[[], Optional[socket.socket]],
                  get_remote: Callable[[], Optional[tuple]]):
@@ -170,7 +209,7 @@ class AsteriskRTPOutputTransport(BaseOutputTransport):
         self._seq = 0
         self._timestamp = 0
         self._ssrc = SSRC
-        self._pending: bytes = b""
+        self._pending: bytes = b""    # partial frame buffer (< 160 bytes)
         self._send_lock = asyncio.Lock()
 
     async def start(self, frame: StartFrame):
@@ -180,9 +219,10 @@ class AsteriskRTPOutputTransport(BaseOutputTransport):
         self._pending = b""
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame):
-        """Pipecat hands us PCM at audio_out_sample_rate; convert + send."""
+        """Called by Pipecat with PCM at audio_out_sample_rate; encode + send."""
         pcm = frame.audio
         if frame.sample_rate != SAMPLE_RATE:
+            # TTS may produce audio at a different sample rate (e.g. 16 kHz).
             from voicebot.transport.rtp_codec import resample_pcm_audio
             pcm = resample_pcm_audio(pcm, frame.sample_rate, SAMPLE_RATE)
         ulaw = encode_pcm_to_ulaw(pcm)
@@ -190,17 +230,18 @@ class AsteriskRTPOutputTransport(BaseOutputTransport):
         for f in frames:
             await self._send_rtp_frame(f)
 
-    async def process_frame(self, frame: Frame, direction):  # noqa: D401
+    async def process_frame(self, frame: Frame, direction):
         await super().process_frame(frame, direction)
         if isinstance(frame, (InterruptionFrame, CancelFrame)):
-            # Drop the partial-frame buffer — interrupted mid-utterance.
+            # Drop the partial-frame buffer — mid-utterance audio already
+            # queued for sending is discarded on interruption.
             self._pending = b""
 
     async def _send_rtp_frame(self, ulaw_frame: bytes) -> None:
         sock = self._get_socket()
         remote = self._get_remote()
         if sock is None or remote is None:
-            # Asterisk hasn't sent us a packet yet — we don't know where to reply.
+            # Remote not yet learned (no inbound packet from Asterisk yet).
             return
         packet = build_rtp_packet(ulaw_frame, self._seq, self._timestamp, self._ssrc)
         async with self._send_lock:
@@ -211,10 +252,14 @@ class AsteriskRTPOutputTransport(BaseOutputTransport):
 
 class AsteriskRTPTransport(BaseTransport):
     """
-    Glues the input and output halves over a single UDP socket.
+    Glues input and output halves over a single UDP socket.
 
-    Output reuses the input socket so symmetric-RTP NAT traversal works
-    (Asterisk's most common configuration).
+    Call transport.input() and transport.output() to get the FrameProcessors
+    for the pipeline. Both are lazy-constructed the first time they're accessed.
+
+    The output half reuses the input socket so symmetric-RTP NAT traversal
+    works: Asterisk sees our packets arriving from the same {ip:port} it sends
+    to, which satisfies NAT mappings without needing STUN.
     """
 
     def __init__(self, params: Optional[AsteriskRTPParams] = None):
@@ -232,10 +277,13 @@ class AsteriskRTPTransport(BaseTransport):
         if self._output is None:
             self._output = AsteriskRTPOutputTransport(
                 self._params,
+                # Shared socket: output borrows input's UDP socket handle.
                 get_socket=lambda: (
                     self._input._datagram_transport.get_extra_info("socket")
                     if self._input and self._input._datagram_transport else None
                 ),
+                # Remote resolution: prefer explicit params, fall back to
+                # auto-learned address from first inbound packet.
                 get_remote=lambda: (
                     (self._params.remote_host, self._params.remote_port)
                     if self._params.remote_host and self._params.remote_port

@@ -1,11 +1,21 @@
 """
-AreYouThereWatchdog — idle-prompt strikes.
+AreYouThereWatchdog — idle-prompt strikes (ported from rtp_processor.py:2572+).
 
-After ARE_YOU_THERE_TIMEOUT_S of silence, emits a TTSSpeakFrame with the
-language-appropriate "are you there?" prompt. After ARE_YOU_THERE_MAX_STRIKES
-strikes, ends the pipeline.
+BEHAVIOR:
+  • After ARE_YOU_THERE_TIMEOUT_S seconds of silence (no user speech, no bot
+    speech), pushes a TTSSpeakFrame with a localized "are you there?" prompt.
+  • After ARE_YOU_THERE_MAX_STRIKES unanswered prompts, pushes EndFrame
+    (which causes Pipecat to cleanly shut down the pipeline / hang up).
+  • Timer resets whenever:
+      - User starts speaking (UserStartedSpeakingFrame)
+      - Bot starts speaking (BotStartedSpeakingFrame) — timer paused
+      - Bot stops speaking (BotStoppedSpeakingFrame) — timer resumed
 
-Ports rtp_processor.py:2572+ behavior.
+CUSTOMIZE:
+  • Change timeouts: ARE_YOU_THERE_TIMEOUT_S / ARE_YOU_THERE_MAX_STRIKES in .env.
+  • Add / change prompts: edit ARE_YOU_THERE_TEXT below.
+  • Change hangup behavior: replace EndFrame with a custom frame or add a
+    Redis cleanup step before pushing EndFrame.
 """
 from __future__ import annotations
 
@@ -29,7 +39,8 @@ from voicebot.state.language_state import LanguageState
 
 logger = logging.getLogger(__name__)
 
-# Localized "are you there?" prompts (port from cg_voicebot/config.py:135-147).
+# Localized "are you there?" prompts (ported from cg_voicebot/config.py:135-147).
+# CUSTOMIZE: add a language key here that matches keys in SUPPORTED_LNG_SUFFIX.
 ARE_YOU_THERE_TEXT = {
     "english": "Hello, are you there?",
     "hindi": "क्या आप मेरी बात सुन पा रहे हैं?",
@@ -56,14 +67,18 @@ class AreYouThereWatchdog(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, StartFrame):
+            # Pipeline started — kick off the initial idle timer.
             self._reset_timer()
         elif isinstance(frame, UserStartedSpeakingFrame):
+            # User is active — reset strike counter and restart idle timer.
             self._state.are_you_there_count = 0
             self._reset_timer()
         elif isinstance(frame, BotStartedSpeakingFrame):
+            # Don't fire "are you there?" while the bot is talking.
             self._bot_speaking = True
             self._cancel_timer()
         elif isinstance(frame, BotStoppedSpeakingFrame):
+            # Bot finished — restart the idle clock.
             self._bot_speaking = False
             self._reset_timer()
 
@@ -89,11 +104,13 @@ class AreYouThereWatchdog(FrameProcessor):
         logger.info("are_you_there strike %d/%d",
                     self._state.are_you_there_count, ARE_YOU_THERE_MAX_STRIKES)
         if self._state.are_you_there_count >= ARE_YOU_THERE_MAX_STRIKES:
+            # Max strikes reached — end the call.
             await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             return
         text = ARE_YOU_THERE_TEXT.get(
             self._state.current_language, ARE_YOU_THERE_TEXT["english"]
         )
+        # TTSSpeakFrame bypasses the LLM and goes directly to the TTS service.
         await self.push_frame(TTSSpeakFrame(text=text), FrameDirection.DOWNSTREAM)
-        # Restart the timer so we keep polling until the user replies.
+        # Restart so we keep checking until the user replies.
         self._reset_timer()

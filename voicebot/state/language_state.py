@@ -1,8 +1,24 @@
 """
-Language state + hysteresis-gated language switching.
+LanguageState + hysteresis-gated language switching.
 
-Ported verbatim from /Users/admin/livekit/language_state.py — the logic is
-framework-agnostic and works as well in Pipecat as it did in LiveKit Agents.
+LanguageState is a plain dataclass passed by *reference* to every processor
+that needs to read or write the current language or barge-in scratch space.
+It is NOT thread-safe — all access happens on the asyncio event loop.
+
+HYSTERESIS FLOW:
+  LIDProcessor (audio LID) or LanguageSuffixProcessor (text LID fallback)
+    → calls update_candidate(state, detected_language)
+    → after LANG_SWITCH_THRESHOLD consecutive matching turns:
+    → calls commit_switch(state)
+    → LanguageSuffixProcessor calls on_language_switch(old, new)
+    → pipeline.py's callback calls tts.update_options(language=iso)
+
+CUSTOMIZE:
+  • LANG_SWITCH_THRESHOLD in config.py controls how sticky the current language
+    is. 1 = switch on every turn; 3+ = very stable.
+  • supported_languages filters which languages are accepted as switch targets.
+    Set this from call metadata (e.g. Asterisk dialplan variable) in main.py
+    before calling build_and_run().
 """
 from __future__ import annotations
 
@@ -21,26 +37,25 @@ from voicebot.config import (
 
 @dataclass
 class LanguageState:
-    current_language: str
-    candidate_language: Optional[str] = None
-    candidate_count: int = 0
-    turn_count: int = 0
-    last_switch_turn: int = 0
+    current_language: str          # e.g. "hindi" — drives TTS + LLM suffix
+    candidate_language: Optional[str] = None   # language being tested for hysteresis
+    candidate_count: int = 0       # consecutive turns detected in candidate_language
+    turn_count: int = 0            # total transcript turns processed this call
+    last_switch_turn: int = 0      # turn_count at last committed switch
     call_id: str = ""
 
-    # Languages this call is allowed to be transcribed in (Asterisk dialplan
-    # var / job metadata). Used by CredgenicsHTTPSTT, language suffix logic,
-    # and the LLM prompt to gate detection.
+    # Languages this call is allowed to switch to (from job metadata).
+    # Used by CredgenicsHTTPSTT, language suffix, and the LLM prompt.
     supported_languages: list = None
 
-    # Early-barge-in concat scratch space.
-    last_user_transcription: Optional[str] = None
-    pending_concat_text: Optional[str] = None
-    bot_speech_start_ts: Optional[float] = None
-    llm_output_inserted: bool = False
+    # ── Early-barge-in concat scratch ────────────────────────────────────────
+    last_user_transcription: Optional[str] = None  # previous turn's transcript
+    pending_concat_text: Optional[str] = None      # stashed for next-turn prepend
+    bot_speech_start_ts: Optional[float] = None    # monotonic time when bot started
+    llm_output_inserted: bool = False              # True once LLM began streaming
 
-    # Idle watchdog scratch space.
-    are_you_there_count: int = 0
+    # ── Idle watchdog ─────────────────────────────────────────────────────────
+    are_you_there_count: int = 0   # number of "are you there?" prompts sent
 
     def __post_init__(self):
         if self.supported_languages is None:
@@ -48,7 +63,11 @@ class LanguageState:
 
 
 def normalize_speechbrain_label(raw: str) -> Optional[str]:
-    """Map SpeechBrain voxlingua107 output → SUPPORTED_LNG_SUFFIX key."""
+    """Map SpeechBrain voxlingua107 output → SUPPORTED_LNG_SUFFIX key.
+
+    SpeechBrain returns labels like "hi: Hindi" or just "hi". We extract
+    the ISO code and look it up in SPEECHBRAIN_LABEL_MAP.
+    """
     if not raw:
         return None
     code = raw.split(":")[0].strip().lower() if ":" in raw else raw.strip().lower()
@@ -56,7 +75,12 @@ def normalize_speechbrain_label(raw: str) -> Optional[str]:
 
 
 def detect_language_from_text(transcript: str) -> Optional[str]:
-    """Text-level fallback when SpeechBrain hasn't fired yet (short utterance)."""
+    """Text-level LID fallback (langdetect library).
+
+    Used by LanguageSuffixProcessor when SpeechBrain hasn't fired yet
+    (e.g. utterance too short for audio LID, or --no-lid was passed).
+    Returns an internal language key or None.
+    """
     if not transcript or len(transcript.strip()) < 5:
         return None
     try:
@@ -67,9 +91,11 @@ def detect_language_from_text(transcript: str) -> Optional[str]:
 
 
 def update_candidate(state: LanguageState, detected: str) -> bool:
-    """
-    Hysteresis: requires LANG_SWITCH_THRESHOLD consecutive turns in the
-    detected language before the switch is committed.
+    """Record a language detection vote and return True if threshold is met.
+
+    Consecutive detections of the same language increment candidate_count.
+    A detection of the current language resets the candidate (no switch needed).
+    A detection of a *different* candidate restarts the count from 1.
     """
     if detected == state.current_language:
         state.candidate_language = None
@@ -84,7 +110,7 @@ def update_candidate(state: LanguageState, detected: str) -> bool:
 
 
 def commit_switch(state: LanguageState) -> str:
-    """Commit the pending candidate. Returns the new language key."""
+    """Commit the pending candidate language. Returns the new language key."""
     new_lang = state.candidate_language
     state.last_switch_turn = state.turn_count
     state.current_language = new_lang

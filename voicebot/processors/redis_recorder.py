@@ -1,11 +1,27 @@
 """
-Redis recorders — persist user and assistant turns into Redis as the pipeline
-runs.
+Redis recorders — persist conversation turns as the pipeline runs.
 
-Two FrameProcessors:
-  - RedisUserRecorder: appends on each final TranscriptionFrame.
-  - RedisAssistantRecorder: accumulates LLM TextFrames between
-    LLMFullResponseStartFrame and LLMFullResponseEndFrame, appends on end.
+Two FrameProcessors that write to ConversationMemory (Redis in production):
+
+  RedisUserRecorder:
+    Listens for TranscriptionFrame. Appends the transcript as a "user" message.
+    Placed AFTER LanguageSuffixProcessor so the stored text includes the
+    suffix (if inject_suffix=True), matching what the LLM received.
+
+  RedisAssistantRecorder:
+    Listens for LLMFullResponseStartFrame / TextFrame / LLMFullResponseEndFrame.
+    Accumulates the full streamed response into a buffer, then appends it as
+    an "assistant" message on LLMFullResponseEndFrame.
+    Placed BEFORE tts so the assistant text is recorded regardless of whether
+    TTS succeeds.
+
+CUSTOMIZE:
+  • To record additional metadata (language, timestamp, call_id):
+    extend RedisMemory.append() to accept kwargs and pass them here.
+  • To record only delivered text (skip interrupted responses):
+    move RedisAssistantRecorder to AFTER transport.output() and wire it to
+    BotStoppedSpeakingFrame — but be aware EarlyBargeInConcatProcessor
+    depends on having the turn already in Redis to trim it on barge-in.
 """
 from __future__ import annotations
 
@@ -50,6 +66,7 @@ class RedisAssistantRecorder(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, LLMFullResponseStartFrame):
+            # New LLM response starting — clear any leftover buffer.
             self._buf.clear()
             self._collecting = True
         elif isinstance(frame, TextFrame) and self._collecting:

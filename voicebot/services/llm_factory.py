@@ -1,9 +1,14 @@
 """
-LLM factory — selector returning a stock Pipecat LLMService.
+LLM factory — returns a stock Pipecat LLMService based on LLM_VENDOR.
 
-All four vendors (Groq, OpenAI, AWS Bedrock, Sarvam) ship as Pipecat services,
-so this is a thin selector. Replaces the custom LLMVendorFactory in
-cg_voicebot/llm_vendor.py:349.
+All four vendors ship as Pipecat services, so this is a thin selector.
+Replaces the custom LLMVendorFactory in cg_voicebot/llm_vendor.py:349.
+
+TO ADD A NEW VENDOR:
+  1. pip install "pipecat-ai[your-vendor]" (or add the extra to requirements.txt)
+  2. Add a new `if vendor == "yourvendor":` block below.
+  3. Set LLM_VENDOR=yourvendor in .env.
+  4. Add any new API key vars to config.py.
 """
 from __future__ import annotations
 
@@ -24,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_llm() -> LLMService:
+    """
+    Returns the configured LLM service.
+
+    LLM_MODEL is passed straight to the vendor; valid values depend on the
+    vendor (e.g. "llama-3.1-70b-versatile" for Groq, "gpt-4o" for OpenAI).
+    """
     vendor = LLM_VENDOR
     if vendor == "groq":
         from pipecat.services.groq.llm import GroqLLMService  # type: ignore
