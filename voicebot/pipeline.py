@@ -68,6 +68,7 @@ from voicebot.processors.event_logger import EventLogger
 from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
+from voicebot.processors.text_normalizer import TextNormalizationProcessor
 from voicebot.prompts.call_data import build_system_prompt
 from voicebot.services.llm_factory import build_llm
 from voicebot.services.tts_factory import build_tts
@@ -257,7 +258,7 @@ async def build_and_run(
 
     procs.append(stt)
     # ← GOOD INSERTION POINT: post-STT transcript manipulation
-    # (e.g. profanity filter, transcript normalization, custom LID fallback)
+    # (e.g. profanity filter, custom LID fallback)
 
     if debug_frames:
         procs.append(FrameTap("post-stt"))
@@ -281,10 +282,10 @@ async def build_and_run(
         # User-side LLM aggregator: collects transcript, manages LLMContext,
         # fires the LLM on UserStoppedSpeakingFrame. VAD runs inside here.
         context_aggr.user(),
-
         llm,
         # ← GOOD INSERTION POINT: post-LLM text processing
         # (e.g. response filter, SSML injection, language-specific post-processing)
+        TextNormalizationProcessor(lang="en", state=state)
     ])
 
     if debug_frames:

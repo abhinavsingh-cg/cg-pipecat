@@ -65,6 +65,15 @@ class LanguageSuffixProcessor(FrameProcessor):
         s = self._state
         s.turn_count += 1
 
+        # Short utterances (≤3 words) are unreliable for language detection —
+        # keep the current language and skip LID entirely.
+        if len(frame.text.split()) <= 3:
+            if self._inject_suffix:
+                suffix = SUPPORTED_LNG_SUFFIX.get(s.current_language, "")
+                if suffix:
+                    frame.text = f"{frame.text}{suffix}"
+            return
+
         # Text-level LID fallback: only fires if SpeechBrain LIDProcessor
         # didn't already propose a candidate (short utterance, no audio LID).
         if not s.candidate_language:

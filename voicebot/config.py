@@ -115,7 +115,7 @@ DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-2")
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "hindi")
 # How many consecutive turns in a new language before the bot switches.
 # Higher = more stable (fewer accidental switches); lower = more responsive.
-LANG_SWITCH_THRESHOLD = int(os.getenv("LANG_SWITCH_THRESHOLD", "2"))
+LANG_SWITCH_THRESHOLD = int(os.getenv("LANG_SWITCH_THRESHOLD", "1"))
 
 # ISO 639-1 code ↔ internal language key.
 # CUSTOMIZE: add a language here + in SUPPORTED_LNG_SUFFIX + ARE_YOU_THERE_TEXT
