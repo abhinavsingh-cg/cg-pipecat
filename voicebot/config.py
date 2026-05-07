@@ -37,7 +37,7 @@ SSRC = 12345678                  # fixed SSRC for outbound stream (arbitrary)
 # Lower VAD_MIN_SPEECH_MS if it misses very short utterances.
 VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "500"))
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "200"))
-VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.6"))
+VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.8"))
 
 # ── Idle / "are you there?" ──────────────────────────────────────────────────
 # After ARE_YOU_THERE_TIMEOUT_S of silence the bot asks "are you there?".

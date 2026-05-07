@@ -100,3 +100,6 @@ dump.rdb
 /.history
 .env_old
 .env.docker
+*.env
+**/__pycache__/
+*.py[cod]

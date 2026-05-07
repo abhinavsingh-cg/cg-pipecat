@@ -49,6 +49,7 @@ class RedisUserRecorder(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame) and frame.text:
+            logger.info("user_transcript | text=%r", frame.text)
             try:
                 await self._memory.append("user", frame.text)
             except Exception as exc:
@@ -77,6 +78,7 @@ class RedisAssistantRecorder(FrameProcessor):
             text = "".join(self._buf).strip()
             self._buf.clear()
             if text:
+                logger.info("llm_response | text=%r", text)
                 try:
                     await self._memory.append("assistant", text)
                 except Exception as exc:
