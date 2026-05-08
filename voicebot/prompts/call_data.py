@@ -33,19 +33,12 @@ DEFAULT_CALL_DATA = {
     "casa_account_type": "savings",
     "previous_status": "Call Back",
     "language_supported": "Hindi, English, Telugu, Malayalam, Bengali, Marathi, Tamil",
+    "default_language": "hindi",
 }
 
 
-def build_system_prompt(call_data: Optional[dict] = None) -> str:
-    """
-    Load pd_si.py's `system_prompt` and `prompt` strings and template them
-    with `call_data` (defaults to DEFAULT_CALL_DATA for dev runs).
-
-    pd_si.py contains a `payload = json.dumps(...)` at the bottom referencing
-    undefined names — exec it with stub globals to extract only the strings
-    we need.
-    """
-    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+def _load_pd_si_globals() -> dict:
+    """Exec pd_si.py with stub globals and return its module namespace."""
     pd_si_path = os.path.join(os.path.dirname(__file__), "pd_si.py")
     with open(pd_si_path, "r", encoding="utf-8") as fh:
         source = fh.read()
@@ -56,5 +49,35 @@ def build_system_prompt(call_data: Optional[dict] = None) -> str:
         "company_id": "",
     }
     exec(source, stub_globals)  # noqa: S102
-    combined = stub_globals["system_prompt"] + "\n\n" + stub_globals["prompt"]
+    return stub_globals
+
+
+def build_system_prompt(call_data: Optional[dict] = None) -> str:
+    """
+    Load pd_si.py's `system_prompt` and `prompt` strings and template them
+    with `call_data` (defaults to DEFAULT_CALL_DATA for dev runs).
+    """
+    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+    g = _load_pd_si_globals()
+    combined = g["system_prompt"] + "\n\n" + g["prompt"]
     return combined.format(**data)
+
+
+def build_first_message(call_data: Optional[dict] = None) -> str:
+    """
+    Pull `first_message` out of pd_si.py's `payload` (a json.dumps string),
+    pick the language + gender variant, and template with call_data.
+
+    Falls back to hindi/female if the requested combo isn't defined.
+    """
+    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+    g = _load_pd_si_globals()
+    payload = _json.loads(g["payload"])
+    messages = payload["first_message"]["message"]
+
+    lang = (data.get("default_language") or "hindi").lower()
+    gender = (data.get("agent_gender") or "female").lower()
+
+    by_lang = messages.get(lang) or messages.get("hindi") or next(iter(messages.values()))
+    template = by_lang.get(gender) or by_lang.get("female") or next(iter(by_lang.values()))
+    return template.format(**data)

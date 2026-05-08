@@ -38,17 +38,44 @@ except ImportError:
     logger.warning("num2words not installed — TextNormalizationProcessor is a no-op; pip install num2words")
 
 
+# Matches a number with optional thousands separators and an optional decimal:
+#   12          → 12
+#   10,000      → 10000  (commas stripped)
+#   1,23,456    → 123456 (Indian grouping works too)
+#   12.75       → 12.75
+#   2,026.50    → 2026.50
+_NUMBER_RE = re.compile(r"\d+(?:,\d+)*(?:\.\d+)?")
+
+
+def _normalize_match(s: str, lang: str) -> str:
+    """
+    Spoken-form rendering for a single number match.
+      • integer part   → num2words   ("ten thousand")
+      • decimal part   → digit-by-digit, space-separated, prefixed with " point "
+        e.g. 12.75 → "twelve point seven five"
+    """
+    if "." in s:
+        int_part, dec_part = s.split(".", 1)
+    else:
+        int_part, dec_part = s, ""
+    int_part = int_part.replace(",", "")
+    try:
+        int_words = _num2words(int(int_part), lang=lang)
+    except Exception:
+        return s
+    if not dec_part:
+        return int_words
+    try:
+        dec_words = " ".join(_num2words(int(d), lang=lang) for d in dec_part)
+    except Exception:
+        return s
+    return f"{int_words} point {dec_words}"
+
+
 def _replace_numbers(text: str, lang: str = "en") -> str:
     if not _HAS_NUM2WORDS:
         return text
-
-    def _sub(m: re.Match) -> str:
-        try:
-            return _num2words(int(m.group()), lang=lang)
-        except Exception:
-            return m.group()
-
-    return re.sub(r"\b\d+\b", _sub, text)
+    return _NUMBER_RE.sub(lambda m: _normalize_match(m.group(), lang), text)
 
 
 class TextNormalizationProcessor(FrameProcessor):
@@ -132,10 +159,22 @@ class TextNormalizationProcessor(FrameProcessor):
             current_lang = self._state.current_language if self._state else "unknown"
             logger.info("llm_text | text=%r | current_lang=%s", frame.text, current_lang)
 
+            # Walk back from the tail while we're "potentially mid-number".
+            # A char is part of an ambiguous tail if it is a digit, OR it is
+            # ',' / '.' AND the char before it is a digit (i.e. could be a
+            # thousands separator or decimal point still being streamed).
+            # This holds chunks like "10","," ,"000" together (→ "10,000")
+            # and "12",".","75" together (→ "12.75").
             combined = self._pending + frame.text
             i = len(combined)
-            while i > 0 and combined[i - 1].isdigit():
-                i -= 1
+            while i > 0:
+                ch = combined[i - 1]
+                if ch.isdigit():
+                    i -= 1
+                elif ch in (",", ".") and i >= 2 and combined[i - 2].isdigit():
+                    i -= 1
+                else:
+                    break
             emit, self._pending = combined[:i], combined[i:]
 
             if not emit:

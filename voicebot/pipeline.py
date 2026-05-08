@@ -48,6 +48,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import (
     UserTurnStrategies,
@@ -68,10 +69,11 @@ from voicebot.processors.are_you_there import AreYouThereWatchdog
 from voicebot.processors.early_barge_in import EarlyBargeInConcatProcessor
 from voicebot.processors.event_logger import EventLogger
 from voicebot.processors.frame_tap import FrameTap
+from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
-from voicebot.prompts.call_data import build_system_prompt
+from voicebot.prompts.call_data import build_first_message, build_system_prompt
 from voicebot.services.llm_factory import build_llm
 from voicebot.services.tts_factory import build_tts
 from voicebot.state.language_state import LanguageState
@@ -204,7 +206,8 @@ async def build_and_run(
     # doesn't attach language metadata to transcripts. All streaming STTs
     # (Sarvam, Deepgram) carry their own language signal so the suffix isn't
     # needed and would just pollute the LLM context.
-    inject_suffix = STT_PRIMARY in ("credgenics", "credgenics_http")
+    # inject_suffix = STT_PRIMARY in ("credgenics", "credgenics_http")
+    inject_suffix = True
 
     # ── LLM context ───────────────────────────────────────────────────────────
     # LLMContext holds the message list. LLMContextAggregatorPair splits it into
@@ -297,6 +300,12 @@ async def build_and_run(
         # Accumulates LLM TextFrames into a full response, then appends to Redis.
         RedisAssistantRecorder(memory),
 
+        # Uninterruptible-greeting gate: while state.greeting_active is True,
+        # swallows InterruptionFrame / UserStartedSpeakingFrame so the deterministic
+        # first message can't be cancelled by VAD false-triggers. Bot keeps
+        # listening — STT and aggregator are upstream and run normally.
+        GreetingGate(state),
+
         # Converts streaming TextFrames → OutputAudioRawFrames via the TTS vendor.
         tts,
         # ← GOOD INSERTION POINT: post-TTS audio processing
@@ -313,6 +322,10 @@ async def build_and_run(
 
         EventLogger("output"),
         transport.output(),
+
+        # Flips state.greeting_active to False on first BotStoppedSpeakingFrame —
+        # restoring normal barge-in behaviour for the rest of the call.
+        GreetingDoneFlag(state),
 
         # Assistant-side aggregator: commits the full assistant response into
         # LLMContext AFTER it has been played out. Placed after transport.output()
@@ -337,6 +350,18 @@ async def build_and_run(
             audio_out_sample_rate=SAMPLE_RATE,
         ),
     )
+
+    # ── Deterministic first message ──────────────────────────────────────────
+    # Pulled from pd_si.py's first_message dict (language + gender variant),
+    # templated with call_data, sent straight to TTS via TTSSpeakFrame so it
+    # bypasses the LLM entirely. GreetingGate keeps it uninterruptible until
+    # the bot finishes speaking.
+    greeting = build_first_message()
+    await task.queue_frames([TTSSpeakFrame(greeting)])
+    # Persist as the first assistant turn so the LLM context reflects what
+    # was actually said, and the LLM doesn't repeat the introduction.
+    await memory.append("assistant", greeting)
+    logger.info("first_message | text=%r", greeting)
 
     runner = PipelineRunner(handle_sigint=handle_sigint)
     try:

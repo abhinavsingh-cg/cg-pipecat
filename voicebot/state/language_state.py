@@ -57,6 +57,14 @@ class LanguageState:
     # ── Idle watchdog ─────────────────────────────────────────────────────────
     are_you_there_count: int = 0   # number of "are you there?" prompts sent
 
+    # ── Greeting gate ─────────────────────────────────────────────────────────
+    # True from call start until the first BotStoppedSpeakingFrame fires.
+    # While True, GreetingGate swallows InterruptionFrame /
+    # UserStartedSpeakingFrame so the deterministic first message can't be
+    # cancelled by VAD false-triggers. STT/aggregator continue running
+    # normally — bot keeps listening throughout.
+    greeting_active: bool = True
+
     def __post_init__(self):
         if self.supported_languages is None:
             self.supported_languages = [self.current_language]
