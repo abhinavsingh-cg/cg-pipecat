@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from voicebot.config import SAMPLE_RATE, WEBRTC_HOST, WEBRTC_PORT
+from voicebot.dependencies import db_lifespan
 from voicebot.observability import setup_logging
 from voicebot.pipeline import build_and_run, load_lid_model
 from voicebot.state.memory import InMemoryMemory
@@ -109,7 +110,7 @@ def build_app(lid_model, debug_frames: bool = False) -> FastAPI:
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport            # type: ignore
 
     handler = SmallWebRTCRequestHandler()
-    app = FastAPI(title="voicebot dev")
+    app = FastAPI(title="voicebot dev", lifespan=db_lifespan)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
