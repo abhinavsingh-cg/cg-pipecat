@@ -57,6 +57,12 @@ class LanguageState:
     # ── Idle watchdog ─────────────────────────────────────────────────────────
     are_you_there_count: int = 0   # number of "are you there?" prompts sent
 
+    # ── End-of-call signal ───────────────────────────────────────────────────
+    # Set True by TextNormalizationProcessor when the LLM emits "| END |".
+    # The post-TTS EndCallTrigger fires the hangup hook on the next
+    # BotStoppedSpeakingFrame.
+    end_after_speech: bool = False
+
     # ── Greeting gate ─────────────────────────────────────────────────────────
     # True from call start until the first BotStoppedSpeakingFrame fires.
     # While True, GreetingGate swallows InterruptionFrame /

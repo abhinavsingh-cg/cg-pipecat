@@ -55,6 +55,13 @@ def build_tts(language_key: str) -> TTSService:
     enum, etc.) as needed.
     """
     vendor = TTS_VENDOR
+    iso = LANG_TO_ISO.get(language_key, "hi")
+    logger.info(
+        "tts_language_init | vendor=%s | language_key=%s | iso=%s",
+        vendor,
+        language_key,
+        iso,
+    )
     if vendor == "sarvam":
         from pipecat.services.sarvam.tts import SarvamTTSService  # type: ignore
         # voice_id / speaker options: shubh, meera, arvind, amol, amartya, diya
@@ -81,7 +88,6 @@ def build_tts(language_key: str) -> TTSService:
         )
     if vendor == "cartesia":
         from pipecat.services.cartesia.tts import CartesiaTTSService  # type: ignore
-        iso = LANG_TO_ISO.get(language_key, "hi")
         return CartesiaTTSService(
             api_key=CARTESIA_API_KEY,
             voice_id=CARTESIA_VOICE_ID,

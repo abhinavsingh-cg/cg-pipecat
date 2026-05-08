@@ -46,6 +46,11 @@ except ImportError:
 #   2,026.50    → 2026.50
 _NUMBER_RE = re.compile(r"\d+(?:,\d+)*(?:\.\d+)?")
 
+# End-of-call marker — when the LLM emits this token in its response,
+# strip it before TTS/Redis see it and arm state.end_after_speech so the
+# post-TTS trigger can hang up once the goodbye finishes playing.
+END_MARKER = "| END |"
+
 
 def _normalize_match(s: str, lang: str) -> str:
     """
@@ -108,6 +113,19 @@ class TextNormalizationProcessor(FrameProcessor):
     async def _flush_pending(self, direction: FrameDirection) -> None:
         if not self._pending:
             return
+        # Strip any END_MARKER that survived in the tail buffer (e.g. the
+        # response ended with "... | END |" and the prefix-tail logic was
+        # holding it back waiting for more chunks).
+        while True:
+            idx = self._pending.find(END_MARKER)
+            if idx < 0:
+                break
+            self._pending = self._pending[:idx] + self._pending[idx + len(END_MARKER):]
+            if self._state is not None:
+                self._state.end_after_speech = True
+            logger.info("end_marker detected in flush; will hang up after bot stops speaking")
+        if not self._pending:
+            return
         normalized = _replace_numbers(self._pending, self._resolve_num2words_lang())
         if normalized != self._pending:
             logger.info(
@@ -147,9 +165,12 @@ class TextNormalizationProcessor(FrameProcessor):
             return
 
         # Bot was interrupted — drop in-flight pending so it doesn't bleed
-        # into the next response.
+        # into the next response. Also disarm any pending end-of-call: an
+        # interrupted goodbye should not trigger hangup.
         if isinstance(frame, InterruptionFrame):
             self._pending = ""
+            if self._state is not None:
+                self._state.end_after_speech = False
             await self.push_frame(frame, direction)
             return
 
@@ -159,13 +180,26 @@ class TextNormalizationProcessor(FrameProcessor):
             current_lang = self._state.current_language if self._state else "unknown"
             logger.info("llm_text | text=%r | current_lang=%s", frame.text, current_lang)
 
+            combined = self._pending + frame.text
+
+            # Strip any complete END_MARKER occurrences and arm the
+            # post-speech hangup flag. Done before the digit-tail split so
+            # the marker can never appear in `emit` and reach TTS / Redis.
+            while True:
+                idx = combined.find(END_MARKER)
+                if idx < 0:
+                    break
+                combined = combined[:idx] + combined[idx + len(END_MARKER):]
+                if self._state is not None:
+                    self._state.end_after_speech = True
+                logger.info("end_marker detected; will hang up after bot stops speaking")
+
             # Walk back from the tail while we're "potentially mid-number".
             # A char is part of an ambiguous tail if it is a digit, OR it is
             # ',' / '.' AND the char before it is a digit (i.e. could be a
             # thousands separator or decimal point still being streamed).
             # This holds chunks like "10","," ,"000" together (→ "10,000")
             # and "12",".","75" together (→ "12.75").
-            combined = self._pending + frame.text
             i = len(combined)
             while i > 0:
                 ch = combined[i - 1]
@@ -175,7 +209,18 @@ class TextNormalizationProcessor(FrameProcessor):
                     i -= 1
                 else:
                     break
-            emit, self._pending = combined[:i], combined[i:]
+
+            # Also hold back any trailing run that could be the start of a
+            # split END_MARKER (e.g. "...goodbye | EN" + "D |").
+            marker_keep = 0
+            max_k = min(len(END_MARKER) - 1, len(combined))
+            for k in range(max_k, 0, -1):
+                if combined[-k:] == END_MARKER[:k]:
+                    marker_keep = k
+                    break
+            j = len(combined) - marker_keep
+            boundary = min(i, j)
+            emit, self._pending = combined[:boundary], combined[boundary:]
 
             if not emit:
                 # Whole chunk is part of an unfinished number — swallow this

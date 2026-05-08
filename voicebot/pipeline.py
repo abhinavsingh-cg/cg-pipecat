@@ -61,12 +61,14 @@ from voicebot.config import (
     SAMPLE_RATE,
     STT_PRIMARY,
     SUPPORTED_LANGUAGES,
+    TTS_VENDOR,
     VAD_CONFIDENCE,
     VAD_MIN_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
 )
 from voicebot.processors.are_you_there import AreYouThereWatchdog
 from voicebot.processors.early_barge_in import EarlyBargeInConcatProcessor
+from voicebot.processors.end_call import EndCallTrigger
 from voicebot.processors.event_logger import EventLogger
 from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
@@ -194,9 +196,18 @@ async def build_and_run(
     def on_language_switch(old: str, new: str) -> None:
         logger.info("language switch %s -> %s; updating TTS", old, new)
         iso = LANG_TO_ISO.get(new, "hi")
-        for kw, val in (("target_language_code", f"{iso}-IN"), ("language", iso)):
+        # Sarvam expects a region-suffixed code (e.g. "hi-IN"); other vendors
+        # take the bare ISO code.
+        sarvam_code = f"{iso}-IN" if TTS_VENDOR == "sarvam" else iso
+        for kw, val in (("target_language_code", sarvam_code), ("language", iso)):
             try:
                 tts.update_options(**{kw: val})
+                logger.info(
+                    "tts_language_updated | lang=%s | kwarg=%s | value=%s",
+                    new,
+                    kw,
+                    val,
+                )
                 return
             except Exception:
                 continue
@@ -262,6 +273,11 @@ async def build_and_run(
         procs.append(lid_proc)
 
     procs.append(stt)
+    # Note: TranscriptionFrame.language may carry a region suffix from some
+    # vendors (e.g. Sarvam returns "hi-IN"). LanguageSuffixProcessor below
+    # strips the suffix when voting into LanguageState.current_language, so
+    # the rest of the pipeline reads bare ISO codes via state — no separate
+    # normalizer processor is needed.
     # ← GOOD INSERTION POINT: post-STT transcript manipulation
     # (e.g. profanity filter, custom LID fallback)
 
@@ -319,6 +335,13 @@ async def build_and_run(
         # Idle watchdog: emits ARE_YOU_THERE_TEXT after ARE_YOU_THERE_TIMEOUT_S
         # of silence; hangs up after ARE_YOU_THERE_MAX_STRIKES strikes.
         AreYouThereWatchdog(state),
+
+        # End-of-call trigger: when TextNormalizationProcessor stripped a
+        # "| END |" marker from the LLM response, state.end_after_speech is
+        # True. This processor watches for BotStoppedSpeakingFrame (emitted
+        # by TTS after the goodbye finishes playing) and fires the hangup
+        # hook + EndFrame.
+        EndCallTrigger(state),
 
         EventLogger("output"),
         transport.output(),

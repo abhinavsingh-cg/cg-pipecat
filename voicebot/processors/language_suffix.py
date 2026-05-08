@@ -30,6 +30,7 @@ from typing import Callable, Optional
 
 from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.transcriptions.language import Language as PipecatLanguage
 
 from voicebot.config import LANG_SWITCH_THRESHOLD, LANG_TO_ISO, SUPPORTED_LNG_SUFFIX
 from voicebot.state.language_state import (
@@ -61,27 +62,17 @@ class LanguageSuffixProcessor(FrameProcessor):
             self._handle(frame)
         await self.push_frame(frame, direction)
 
-    def _handle(self, frame: TranscriptionFrame) -> None:
+    @staticmethod
+    def _stt_lang_iso(frame: TranscriptionFrame) -> Optional[str]:
+        """Reduce frame.language (Pipecat enum or string) to a bare ISO code."""
+        lang = frame.language
+        if not lang:
+            return None
+        raw = lang.value if isinstance(lang, PipecatLanguage) else str(lang)
+        return raw.split("-", 1)[0].lower() if raw else None
+
+    def _maybe_commit(self) -> None:
         s = self._state
-        s.turn_count += 1
-
-        # Short utterances (≤3 words) are unreliable for language detection —
-        # keep the current language and skip LID entirely.
-        if len(frame.text.split()) <= 3:
-            if self._inject_suffix:
-                suffix = SUPPORTED_LNG_SUFFIX.get(s.current_language, "")
-                if suffix:
-                    frame.text = f"{frame.text}{suffix}"
-            return
-
-        # Text-level LID fallback: only fires if SpeechBrain LIDProcessor
-        # didn't already propose a candidate (short utterance, no audio LID).
-        if not s.candidate_language:
-            fallback = detect_language_from_text(frame.text)
-            if fallback and fallback in s.supported_languages:
-                update_candidate(s, fallback)
-
-        # Commit the language switch once hysteresis threshold is reached.
         if s.candidate_language and s.candidate_count >= LANG_SWITCH_THRESHOLD:
             old = s.current_language
             new = commit_switch(s)
@@ -92,8 +83,51 @@ class LanguageSuffixProcessor(FrameProcessor):
                 except Exception as exc:
                     logger.warning("on_language_switch raised: %s", exc)
 
-        # Append the language-direction suffix (Credgenics STT only).
-        if self._inject_suffix:
-            suffix = SUPPORTED_LNG_SUFFIX.get(s.current_language, "")
-            if suffix:
-                frame.text = f"{frame.text}{suffix}"
+    def _inject(self, frame: TranscriptionFrame, *, note: str = "") -> None:
+        if not self._inject_suffix:
+            return
+        s = self._state
+        suffix = SUPPORTED_LNG_SUFFIX.get(s.current_language, "")
+        if not suffix:
+            return
+        logger.info(
+            "llm_suffix_injected | lang=%s | suffix=%r%s",
+            s.current_language,
+            suffix,
+            f" ({note})" if note else "",
+        )
+        frame.text = f"{frame.text}{suffix}"
+
+    def _handle(self, frame: TranscriptionFrame) -> None:
+        s = self._state
+        s.turn_count += 1
+
+        stt_iso = self._stt_lang_iso(frame)
+        logger.info(
+            "stt_language | stt_lang=%s | current_lang=%s | turn=%d",
+            stt_iso or "n/a",
+            s.current_language,
+            s.turn_count,
+        )
+
+        # Vote for the STT-reported language first — it's a strong signal that
+        # we should not override with a slower text-level LID guess.
+        if stt_iso and stt_iso in s.supported_languages:
+            update_candidate(s, stt_iso)
+            self._maybe_commit()
+
+        # Short utterances (≤3 words) are unreliable for *text* LID — skip the
+        # langdetect fallback. The STT vote above still applies.
+        if len(frame.text.split()) <= 3:
+            self._inject(frame, note="short-utterance")
+            return
+
+        # Text-level LID fallback: only fires if neither the STT nor the
+        # SpeechBrain LIDProcessor have proposed a candidate yet.
+        if not s.candidate_language:
+            fallback = detect_language_from_text(frame.text)
+            if fallback and fallback in s.supported_languages:
+                update_candidate(s, fallback)
+                self._maybe_commit()
+
+        self._inject(frame)

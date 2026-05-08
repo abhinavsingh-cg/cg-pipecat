@@ -85,7 +85,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def _print_startup_banner(logger: logging.Logger) -> None:
     from voicebot.config import (
         DEEPGRAM_API_KEY, GROQ_API_KEY, LLM_VENDOR, OPENAI_API_KEY,
-        SARVAM_API_KEY, STT_PRIMARY, TTS_VENDOR,
+        SARVAM_API_KEY, STT_PRIMARY, TTS_VENDOR, ELEVEN_API_KEY
     )
     keys = {
         "stt:sarvam": bool(SARVAM_API_KEY) if STT_PRIMARY == "sarvam" else None,
@@ -93,6 +93,8 @@ def _print_startup_banner(logger: logging.Logger) -> None:
         "llm:groq": bool(GROQ_API_KEY) if LLM_VENDOR == "groq" else None,
         "llm:openai": bool(OPENAI_API_KEY) if LLM_VENDOR == "openai" else None,
         "tts:sarvam": bool(SARVAM_API_KEY) if TTS_VENDOR == "sarvam" else None,
+        "tts:elevenlabs": bool(ELEVEN_API_KEY) if TTS_VENDOR == "elevenlabs" else None,
+
     }
     missing = [k for k, v in keys.items() if v is False]
     logger.info("vendors: STT=%s LLM=%s TTS=%s", STT_PRIMARY, LLM_VENDOR, TTS_VENDOR)

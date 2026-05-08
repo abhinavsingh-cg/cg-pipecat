@@ -53,6 +53,19 @@ ARE_YOU_THERE_TEXT = {
     "gujarati": "શું તમે મારી વાત સાંભળી શકો છો?",
     "punjabi": "ਕੀ ਤੁਸੀਂ ਮੇਰੀ ਗੱਲ ਸੁਣ ਸਕਦੇ ਹੋ?",
     "urdu": "کیا آپ میری بات سن رہے ہیں؟",
+    "en": "Hello, are you there?",
+    "hi": "क्या आप मेरी बात सुन पा रहे हैं?",
+    "te": "మీరు నా మాట వినగలరా?",
+    "kn": "ನೀವು ನನ್ನ ಮಾತು ಕೇಳುತ್ತೀರಾ?",
+    "ta": "நீங்கள் என் பேச்சை கேட்கிறீர்களா?",
+    "bn": "আপনি কি আমার কথা শুনতে পাচ্ছেন?",
+    "ml": "നിങ്ങൾ എന്റെ ശബ്ദം കേൾക്കുന്നുണ്ടോ?",
+    "mr": "तुम्ही माझं बोलणं ऐकू शकता का?",
+    "gu": "શું તમે મારી વાત સાંભળી શકો છો?",
+    "pu": "ਕੀ ਤੁਸੀਂ ਮੇਰੀ ਗੱਲ ਸੁਣ ਸਕਦੇ ਹੋ?",
+    "pa": "ਕੀ ਤੁਸੀਂ ਮੇਰੀ ਗੱਲ ਸੁਣ ਸਕਦੇ ਹੋ?",
+    "ur": "کیا آپ میری بات سن رہے ہیں؟",
+
 }
 
 
@@ -111,6 +124,9 @@ class AreYouThereWatchdog(FrameProcessor):
             self._state.current_language, ARE_YOU_THERE_TEXT["english"]
         )
         # TTSSpeakFrame bypasses the LLM and goes directly to the TTS service.
-        await self.push_frame(TTSSpeakFrame(text=text), FrameDirection.DOWNSTREAM)
+        # This processor sits AFTER the TTS service in the pipeline, so the
+        # frame must travel UPSTREAM to reach it. Pushing downstream would
+        # send it toward transport.output(), which would never synthesize it.
+        await self.push_frame(TTSSpeakFrame(text=text), FrameDirection.UPSTREAM)
         # Restart so we keep checking until the user replies.
         self._reset_timer()

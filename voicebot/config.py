@@ -112,7 +112,7 @@ DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-2")
 
 # ── Language ────────────────────────────────────────────────────────────────
 # DEFAULT_LANGUAGE must be a key in SUPPORTED_LNG_SUFFIX below.
-DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "hindi")
+DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "hi")
 # How many consecutive turns in a new language before the bot switches.
 # Higher = more stable (fewer accidental switches); lower = more responsive.
 LANG_SWITCH_THRESHOLD = int(os.getenv("LANG_SWITCH_THRESHOLD", "1"))
@@ -132,13 +132,13 @@ LANGUAGE_TO_CODES["panjabi"] = "pa"
 # The system prompt (prompts/pd_si.py:269-270) has matching hard rules.
 # CUSTOMIZE: add / edit language entries here to change what the LLM receives.
 SUPPORTED_LNG_SUFFIX = {
-    "english":   " : Reply to this in English language",
-    "hindi":     " : इसका जवाब हिंदी भाषा में दे",
-    "telugu":    " : దీనికి తెలుగులో సమాధానం ఇవ్వండి",
-    "malayalam": " : ഇതിന് മലയാളത്തിൽ മറുപടി നൽകുക.",
-    "marathi":   " : याला मराठीत उत्तर द्या.",
-    "tamil":     " : இதற்குத் தமிழில் பதிலளிக்கவும்.",
-    "bengali":   " : এর জবাবে বাংলায় লিখুন।",
+    "en":   " : Reply to this in English language",
+    "hi":     " : इसका जवाब हिंदी भाषा में दे",
+    "te":    " : దీనికి తెలుగులో సమాధానం ఇవ్వండి",
+    "ml": " : ഇതിന് മലയാളത്തിൽ മറുപടി നൽകുക.",
+    "mr":   " : याला मराठीत उत्तर द्या.",
+    "ta":     " : இதற்குத் தமிழில் பதிலளிக்கவும்.",
+    "bn":   " : এর জবাবে বাংলায় লিখুন।",
 }
 SUPPORTED_LANGUAGES = set(SUPPORTED_LNG_SUFFIX.keys())
 
