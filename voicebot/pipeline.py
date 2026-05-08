@@ -75,6 +75,7 @@ from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
+from voicebot.digit_handler import DigitHandlingProcessor
 from voicebot.prompts.call_data import build_first_message, build_system_prompt
 from voicebot.services.llm_factory import build_llm
 from voicebot.services.tts_factory import build_tts
@@ -306,6 +307,7 @@ async def build_and_run(
         llm,
         # ← GOOD INSERTION POINT: post-LLM text processing
         # (e.g. response filter, SSML injection, language-specific post-processing)
+        DigitHandlingProcessor(),
         TextNormalizationProcessor(lang="en", state=state)
     ])
 
