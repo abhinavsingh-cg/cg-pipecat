@@ -31,6 +31,7 @@ def setup_logging() -> logging.Logger:
     formatter = jsonlogger.JsonFormatter(
         fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
+        json_ensure_ascii=False,
     )
     root = logging.getLogger()
     root.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))

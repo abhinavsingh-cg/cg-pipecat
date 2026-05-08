@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Iterable, List, Optional
 
 import redis.asyncio as aioredis
 
 from voicebot.config import CONTEXT_EXPIRY_SECONDS, REDIS_URL
+from voicebot.state.memory import ConversationCallStore, conversation_entry
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,20 @@ def _key(call_id: str) -> str:
 class RedisMemory:
     """Append-only conversation log with trim helpers."""
 
-    def __init__(self, call_id: str, client: Optional[aioredis.Redis] = None):
+    def __init__(
+        self,
+        call_id: str,
+        client: Optional[aioredis.Redis] = None,
+        conversation_store: Optional[ConversationCallStore] = None,
+    ):
         self.call_id = call_id
         self._client = client or aioredis.from_url(REDIS_URL, decode_responses=True)
+        self._conversation_store = (
+            conversation_store or ConversationCallStore(redis_client=self._client)
+        )
 
     async def close(self) -> None:
+        await self._conversation_store.close()
         await self._client.aclose()
 
     async def load(self) -> List[dict]:
@@ -52,7 +61,7 @@ class RedisMemory:
         if existing:
             return existing
         seeded = [
-            {"role": m["role"], "content": m["content"], "timestamp": time.time()}
+            conversation_entry(m["role"], m["content"])
             for m in messages
         ]
         await self._save(seeded)
@@ -60,8 +69,9 @@ class RedisMemory:
 
     async def append(self, role: str, content: str) -> None:
         history = await self.load()
-        history.append({"role": role, "content": content, "timestamp": time.time()})
+        history.append(conversation_entry(role, content))
         await self._save(history)
+        await self._conversation_store.publish(self.call_id, history)
 
     async def trim_last(self, n: int) -> int:
         """Drop the last N messages (used by the early-barge-in concat hook)."""
@@ -69,7 +79,9 @@ class RedisMemory:
         if not history:
             return 0
         drop = min(n, len(history))
-        await self._save(history[:-drop])
+        updated = history[:-drop]
+        await self._save(updated)
+        await self._conversation_store.publish(self.call_id, updated)
         return drop
 
     async def _save(self, history: List[dict]) -> None:
