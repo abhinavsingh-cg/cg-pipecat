@@ -307,8 +307,8 @@ async def build_and_run(
         llm,
         # ← GOOD INSERTION POINT: post-LLM text processing
         # (e.g. response filter, SSML injection, language-specific post-processing)
-        DigitHandlingProcessor(),
-        TextNormalizationProcessor(lang="en", state=state)
+        DigitHandlingProcessor(lang="en", state=state),
+        # TextNormalizationProcessor(lang="en", state=state)
     ])
 
     if debug_frames:

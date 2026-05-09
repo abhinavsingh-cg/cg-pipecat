@@ -157,7 +157,6 @@ class UniversalTextNormalizer:
     # =====================================================
 
     def classify(self, token: str) -> BucketType:
-        print(token)
         if self.PHONE_REGEX.fullmatch(token):
             return BucketType.PHONE_NUMBER
 
@@ -189,10 +188,8 @@ class UniversalTextNormalizer:
         for match in self.EXTRACTION_REGEX.finditer(text):
 
             token = match.group()
-            # print(match)
 
             bucket = self.classify(token)
-            # print(bucket)
 
             tagged_items.append(
                 TaggedSpan(
@@ -203,7 +200,6 @@ class UniversalTextNormalizer:
                     bucket=bucket
                 )
             )
-        print(tagged_items)
         return tagged_items
 
     # =====================================================
@@ -320,14 +316,23 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from voicebot.config import LANGUAGE_TO_CODES
 
 logger = logging.getLogger(__name__)
 
 class DigitHandlingProcessor(FrameProcessor):
-    def __init__(self):
+    def __init__(self, lang: str = "en", state=None):
         super().__init__()
         self.normalizer = UniversalTextNormalizer()
         self._pending = ""
+        self._lang = lang
+        self._state = state
+
+    def _resolve_num2words_lang(self) -> Optional[str]:
+        if self._state is None:
+            return self._lang
+        codes = LANGUAGE_TO_CODES.get(self._state.current_language)
+        return codes if codes else self._lang
 
     def convert_text_numbers_to_words(self, text: str, lang: str = "en") -> str:
         """Replace every number in *text* with its word form in *lang*.
@@ -365,7 +370,8 @@ class DigitHandlingProcessor(FrameProcessor):
         # Process the full accumulated string
         logger.info(f"digit_handler_flush | before: {self._pending!r}")
         processed = self.normalizer.process(self._pending)
-        processed = self.convert_text_numbers_to_words(processed, lang="hi")
+        current_lang = self._resolve_num2words_lang()
+        processed = self.convert_text_numbers_to_words(processed, lang=current_lang)
         logger.info(f"digit_handler_flush | after: {processed!r}")
         
         if processed:
@@ -409,7 +415,8 @@ class DigitHandlingProcessor(FrameProcessor):
                 if complete_text.strip():
                     logger.info(f"digit_handler_chunk | before: {complete_text!r}")
                     processed = self.normalizer.process(complete_text)
-                    processed = self.convert_text_numbers_to_words(processed, lang="hi")
+                    current_lang = self._resolve_num2words_lang()
+                    processed = self.convert_text_numbers_to_words(processed, lang=current_lang)
                     logger.info(f"digit_handler_chunk | after: {processed!r}")
                     await self.push_frame(TextFrame(text=processed), direction)
             
