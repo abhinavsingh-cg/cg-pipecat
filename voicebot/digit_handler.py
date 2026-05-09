@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Callable, Optional
 from enum import Enum
 
+from voicebot.indic_numtowords.numtowords import num2words
 
 # =========================================================
 # ENUMS
@@ -303,6 +304,8 @@ class UniversalTextNormalizer:
         # Separate unrecognized combinations by spaces to force spelling
         return " ".join(list(text))
 
+    
+
  
 # =========================================================
 # PIPECAT FRAME PROCESSOR INTEGRATION
@@ -326,12 +329,44 @@ class DigitHandlingProcessor(FrameProcessor):
         self.normalizer = UniversalTextNormalizer()
         self._pending = ""
 
+    def convert_text_numbers_to_words(self, text: str, lang: str = "en") -> str:
+        """Replace every number in *text* with its word form in *lang*.
+
+        Scans the input string for digit sequences (including optional commas
+        like 1,00,000) and substitutes each with the output of ``num2words``.
+
+        Args:
+            text: A string that may contain embedded numbers.
+            lang: Target language code (e.g. "hi", "ta", "en").
+
+        Returns:
+            The string with every number replaced by its word representation.
+
+        Example:
+            >>> convert_text("I have 500 rupees and 20 coins", lang="hi")
+            'I have पाँच सौ rupees and बीस coins'
+        """
+        def _replace(match: re.Match) -> str:
+            raw = match.group(0)
+            try:
+                num = int(raw.replace(",", ""))
+                return num2words(num, lang=lang)
+            except Exception as e:
+                logger.error(f"Error converting number {raw} to words: {e}")
+                return raw
+
+        # Matches digit groups possibly separated by commas (Indian / Western)
+        return re.sub(r"\d[\d,]*", _replace, text)
+
     async def _flush_pending(self, direction: FrameDirection):
         if not self._pending:
             return
         
         # Process the full accumulated string
+        logger.info(f"digit_handler_flush | before: {self._pending!r}")
         processed = self.normalizer.process(self._pending)
+        processed = self.convert_text_numbers_to_words(processed, lang="hi")
+        logger.info(f"digit_handler_flush | after: {processed!r}")
         
         if processed:
             await self.push_frame(TextFrame(text=processed), direction)
@@ -372,7 +407,10 @@ class DigitHandlingProcessor(FrameProcessor):
                 # Rejoin the complete sentences
                 complete_text = "".join(parts)
                 if complete_text.strip():
+                    logger.info(f"digit_handler_chunk | before: {complete_text!r}")
                     processed = self.normalizer.process(complete_text)
+                    processed = self.convert_text_numbers_to_words(processed, lang="hi")
+                    logger.info(f"digit_handler_chunk | after: {processed!r}")
                     await self.push_frame(TextFrame(text=processed), direction)
             
             return
