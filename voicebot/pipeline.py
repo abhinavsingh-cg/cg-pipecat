@@ -13,11 +13,13 @@ FRAME FLOW (downstream, left → right):
     → context_aggr.user()       # accumulates transcript → LLMContext; owns VAD +
                                 #   interruption broadcast (must receive audio frames)
     → llm                       # streams TextFrames
-    → RedisAssistantRecorder    # persist assistant turn to Redis
+    → AssistantTextCollector    # tracks assistant text headed into TTS
     → tts                       # converts text → OutputAudioRawFrame
+    → AssistantGeneratedAudioRecorder  # counts synthesized assistant audio
     → AreYouThereWatchdog       # idle-prompt timer; resets on user speech / bot speech
     → EventLogger("output")
     → transport.output()        # sends audio to caller (WebRTC or Asterisk RTP)
+    → AssistantDeliveryRecorder # append/update assistant turn from delivered audio
     → context_aggr.assistant()  # commits the assistant turn into LLMContext
 
 KEY CUSTOMIZATION POINTS:
@@ -56,6 +58,7 @@ from pipecat.turns.user_turn_strategies import (
 )
 
 from voicebot.config import (
+    ASSISTANT_PARTIAL_UPDATE_FRAMES,
     DEFAULT_LANGUAGE,
     LANG_TO_ISO,
     SAMPLE_RATE,
@@ -67,17 +70,28 @@ from voicebot.config import (
     VAD_MIN_SPEECH_MS,
 )
 from voicebot.processors.are_you_there import AreYouThereWatchdog
+from voicebot.processors.assistant_delivery_recorder import (
+    AssistantDeliveryRecorder,
+    AssistantGeneratedAudioRecorder,
+    AssistantTextCollector,
+)
 from voicebot.processors.early_barge_in import EarlyBargeInConcatProcessor
 from voicebot.processors.end_call import EndCallTrigger
 from voicebot.processors.event_logger import EventLogger
 from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
-from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
+from voicebot.processors.redis_recorder import RedisUserRecorder
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
-from voicebot.prompts.call_data import build_first_message, build_system_prompt
+from voicebot.prompts.call_data import (
+    build_call_data,
+    build_first_message,
+    build_system_prompt,
+    get_call_data_call_id,
+)
 from voicebot.services.llm_factory import build_llm
 from voicebot.services.tts_factory import build_tts
+from voicebot.state.assistant_speech import AssistantSpeechTracker
 from voicebot.state.language_state import LanguageState
 from voicebot.state.memory import ConversationMemory
 from voicebot.state.redis_memory import RedisMemory
@@ -157,14 +171,18 @@ async def build_and_run(
     handle_sigint: bool = True,
     memory: ConversationMemory | None = None,
     debug_frames: bool = False,
+    call_data: dict | None = None,
 ) -> None:
+    resolved_call_data = build_call_data(call_data)
+    storage_call_id = get_call_data_call_id(resolved_call_data)
+
     # ── Shared state ─────────────────────────────────────────────────────────
     # LanguageState is a plain dataclass passed by reference to every processor
     # that needs to read or update the current language. It also holds scratch
     # space for early-barge-in concat and the idle watchdog.
     state = LanguageState(
         current_language=DEFAULT_LANGUAGE,
-        call_id=call_id,
+        call_id=storage_call_id,
         supported_languages=list(SUPPORTED_LANGUAGES),
     )
 
@@ -174,8 +192,9 @@ async def build_and_run(
     # (run_webrtc.py) uses InMemoryMemory.
     if memory is None:
         memory = RedisMemory(state.call_id)
+    memory.call_id = state.call_id
     history = await memory.seed_if_empty([
-        {"role": "system", "content": build_system_prompt()},
+        {"role": "system", "content": build_system_prompt(resolved_call_data)},
     ])
     logger.info("loaded %d history messages for call %s", len(history), state.call_id)
 
@@ -261,6 +280,9 @@ async def build_and_run(
     # TO ADD A STEP: instantiate your FrameProcessor and insert it at the right
     # position below. Common insertion points are marked with comments.
     procs = [transport.input(), EventLogger("input")]
+    assistant_speech = AssistantSpeechTracker(
+        frame_batch=ASSISTANT_PARTIAL_UPDATE_FRAMES
+    )
 
     if debug_frames:
         # FrameTap logs every non-audio frame name at this pipeline stage.
@@ -306,16 +328,14 @@ async def build_and_run(
         llm,
         # ← GOOD INSERTION POINT: post-LLM text processing
         # (e.g. response filter, SSML injection, language-specific post-processing)
-        TextNormalizationProcessor(lang="en", state=state)
+        TextNormalizationProcessor(lang="en", state=state),
+        AssistantTextCollector(assistant_speech),
     ])
 
     if debug_frames:
         procs.append(FrameTap("post-llm"))
 
     procs.extend([
-        # Accumulates LLM TextFrames into a full response, then appends to Redis.
-        RedisAssistantRecorder(memory),
-
         # Uninterruptible-greeting gate: while state.greeting_active is True,
         # swallows InterruptionFrame / UserStartedSpeakingFrame so the deterministic
         # first message can't be cancelled by VAD false-triggers. Bot keeps
@@ -324,6 +344,9 @@ async def build_and_run(
 
         # Converts streaming TextFrames → OutputAudioRawFrames via the TTS vendor.
         tts,
+        # Counts synthesized audio so delivery-side partial text can be
+        # estimated from audio that actually makes it to the caller.
+        AssistantGeneratedAudioRecorder(assistant_speech),
         # ← GOOD INSERTION POINT: post-TTS audio processing
         # (e.g. audio normalization, logging playback duration)
     ])
@@ -345,6 +368,7 @@ async def build_and_run(
 
         EventLogger("output"),
         transport.output(),
+        AssistantDeliveryRecorder(memory, assistant_speech),
 
         # Flips state.greeting_active to False on first BotStoppedSpeakingFrame —
         # restoring normal barge-in behaviour for the rest of the call.
@@ -378,12 +402,10 @@ async def build_and_run(
     # Pulled from pd_si.py's first_message dict (language + gender variant),
     # templated with call_data, sent straight to TTS via TTSSpeakFrame so it
     # bypasses the LLM entirely. GreetingGate keeps it uninterruptible until
-    # the bot finishes speaking.
-    greeting = build_first_message()
+    # the bot finishes speaking. AssistantDeliveryRecorder persists it from
+    # delivered audio, so an interrupted greeting lands in Redis as a partial.
+    greeting = build_first_message(resolved_call_data)
     await task.queue_frames([TTSSpeakFrame(greeting)])
-    # Persist as the first assistant turn so the LLM context reflects what
-    # was actually said, and the LLM doesn't repeat the introduction.
-    await memory.append("assistant", greeting)
     logger.info("first_message | text=%r", greeting)
 
     runner = PipelineRunner(handle_sigint=handle_sigint)
