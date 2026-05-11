@@ -13,7 +13,7 @@ import sys
 
 from voicebot.observability import setup_logging
 from voicebot.pipeline import build_and_run, load_lid_model
-from voicebot.transport.asterisk_rtp import AsteriskRTPParams, AsteriskRTPTransport
+from voicebot.rtp_transport import RTPUDPTransport
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -32,18 +32,15 @@ def main(argv: list[str]) -> None:
     setup_logging()
     args = parse_args(argv)
 
-    rh, rp = (None, None)
+    remote_addr = None
     if args.remote:
         host, port = args.remote.rsplit(":", 1)
-        rh, rp = host, int(port)
-    # VAD + turn analyzer are wired in pipeline.build_and_run via the user
-    # LLM aggregator (Pipecat 1.1 doesn't read them off TransportParams).
-    params = AsteriskRTPParams(
-        local_port=args.local_port,
-        remote_host=rh,
-        remote_port=rp,
+        remote_addr = (host, int(port))
+
+    transport = RTPUDPTransport(
+        local_addr=("0.0.0.0", args.local_port),
+        remote_addr=remote_addr,
     )
-    transport = AsteriskRTPTransport(params)
     lid_model = load_lid_model(args.no_lid)
 
     asyncio.run(build_and_run(transport, args.call_id, lid_model, handle_sigint=True))
