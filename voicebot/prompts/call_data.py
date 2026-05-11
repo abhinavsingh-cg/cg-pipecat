@@ -96,5 +96,4 @@ def build_first_message(call_data: Optional[dict] = None) -> str:
 
     by_lang = messages.get(lang) or messages.get("hindi") or next(iter(messages.values()))
     template = by_lang.get(gender) or by_lang.get("female") or next(iter(by_lang.values()))
-    import pdb; pdb.set_trace()
     return template.format(**data)
