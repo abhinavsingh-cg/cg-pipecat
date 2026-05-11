@@ -178,3 +178,7 @@ OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "voicebot")
 # ── Local-dev WebRTC server ─────────────────────────────────────────────────
 WEBRTC_HOST = os.getenv("WEBRTC_HOST", "127.0.0.1")
 WEBRTC_PORT = int(os.getenv("WEBRTC_PORT", "7860"))
+
+
+# ── URLs────────────────────────────────────────────────────────────────
+ELEVEN_LABS_URL = os.getenv("ELEVEN_LABS_URL", "wss://api.in.residency.elevenlabs.io")

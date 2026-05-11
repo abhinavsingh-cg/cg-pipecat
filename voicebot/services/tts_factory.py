@@ -32,6 +32,7 @@ from voicebot.config import (
     SARVAM_TTS_SPEAKER,
     SARVAM_TTS_TEMPERATURE,
     TTS_VENDOR,
+    ELEVEN_LABS_URL
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ def build_tts(language_key: str) -> TTSService:
         return ElevenLabsTTSService(
             api_key=ELEVEN_API_KEY,
             voice_id=ELEVENLABS_VOICE_ID,
+            url=ELEVEN_LABS_URL
         )
     if vendor == "cartesia":
         from pipecat.services.cartesia.tts import CartesiaTTSService  # type: ignore
