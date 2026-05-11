@@ -1,0 +1,128 @@
+=== PHONE NUMBER TEST CASES ===
+
+# 1. Standard Indian Mobile Numbers (10 digits starting with 6-9)
+9876543210
+6123456789
+7890123456
+
+# 2. Mobile Numbers with +91 country code (with or without spaces/hyphens)
++919876543210
++91 9876543210
++91-9876543210
+
+# 3. Mobile Numbers with leading 0
+09876543210
+07890123456
+
+# 4. Mobile Numbers formatted with spaces/hyphens (5-5 split)
+98765 43210
++91 98765-43210
+98765-43210
+
+# 5. Mobile Numbers with parentheses
+(987) 654-3210
++91 (987)6543210
++91 (987) 654 3210
+
+# 6. Landline numbers with STD codes (starting with 0, requires space/hyphen)
+011-2345678
+080 12345678
+044-23456789
+022-23456789
+
+# 7. Toll-free numbers
+1800-123-4567
+1860 123 4567
+18001234567
+
+# 8. Negative cases (Should NOT match phone regex, might be ignored or handled by other logic)
+12345 (Too short)
+5987654321 (Starts with 5, not 6-9 for 10-digit mobile)
++1-9876543210 (Different country code)
+1800-12 (Too short for toll-free)
+
+
+=== DATE TEST CASES ===
+
+# 1. Standard DD-MM-YYYY format
+25-12-2026
+01-05-2023
+31-01-1999
+1-5-2023
+
+# 2. Format with slashes (DD/MM/YYYY)
+25/12/2026
+01/05/2023
+1/5/2023
+
+# 3. Format with dots (DD.MM.YYYY)
+25.12.2026
+01.05.2023
+1.5.2023
+
+# 4. Two-digit year formats (DD-MM-YY, DD/MM/YY)
+25-12-26
+01/05/23
+1.5.23
+
+# 5. Reverse formats (YYYY-MM-DD, YYYY/MM/DD)
+2026-12-25
+2023/05/01
+1999-01-31
+
+# 6. Edge cases for days and months
+29-02-2024 (Leap year)
+31-12-2023
+01-01-2000
+
+# 7. Negative cases (Should NOT match date regex)
+32-01-2023 (Invalid day 32)
+12-13-2023 (Invalid month 13)
+2023.05.01 (Dots not supported for YYYY-MM-DD reverse format)
+25-12-260 (Invalid year length)
+12345678 (No separators)
+
+
+=== AMOUNT & FLOAT TEST CASES ===
+
+# 1. Amounts with commas (Commas should be removed)
+10,000      -> 10000
+₹56,789     -> ₹56789
+$1,234,567  -> $1234567
+
+# 2. Amounts with decimals (Dot replaced by '', decimals spaced out)
+₹56,789.50  -> ₹56789  5 0
+$1,234.99   -> $1234  9 9
+100.00      -> 100  0 0
+
+# 3. Standard Floats (Dot replaced by '', decimals spaced out)
+12.75       -> 12  7 5
+3.14159     -> 3  1 4 1 5 9
+0.99        -> 0  9 9
+
+
+=== REFERENCE ID TEST CASES ===
+
+# 1. Standard Reference IDs (At least 5 consecutive digits, with/without letters)
+AB123456XZ  -> A B 1 2 3 4 5 6 X Z
+REF98765    -> R E F 9 8 7 6 5
+12345678    -> 1 2 3 4 5 6 7 8
+TXN12345    -> T X N 1 2 3 4 5
+
+# 2. Negative cases (Should NOT match current Reference ID regex)
+AB123       (Fewer than 5 consecutive digits)
+ABCDEF      (No digits)
+1234        (Fewer than 5 digits)
+
+
+=== RANDOM DIGITS & OTHERS TEST CASES ===
+
+# 1. Random Digits (Spaced out for individual spelling)
+# Note: Currently, a standalone number like "1234" is caught by the AMOUNT_REGEX because its currency symbol is optional!
+# If a number forces its way into RANDOM_DIGIT, it looks like this:
+123456      -> 1 2 3 4 5 6
+987         -> 9 8 7
+
+# 2. Others (Unrecognized combinations, spaced out to force spelling)
+A-123/B     -> A - 1 2 3 / B
+XYZ#99      -> X Y Z # 9 9

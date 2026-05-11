@@ -84,6 +84,7 @@ from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisUserRecorder
 from voicebot.processors.repeat_prompt import RepeatPromptOnFailure
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
+from voicebot.digit_handler import DigitHandlingProcessor
 from voicebot.prompts.call_data import (
     build_call_data,
     build_first_message,
@@ -329,7 +330,8 @@ async def build_and_run(
         llm,
         # ← GOOD INSERTION POINT: post-LLM text processing
         # (e.g. response filter, SSML injection, language-specific post-processing)
-        TextNormalizationProcessor(lang="en", state=state),
+        DigitHandlingProcessor(lang="en", state=state),
+        # TextNormalizationProcessor(lang="en", state=state),
         AssistantTextCollector(assistant_speech),
     ])
 
