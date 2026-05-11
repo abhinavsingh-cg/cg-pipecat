@@ -30,6 +30,7 @@ from langdetect.lang_detect_exception import LangDetectException
 
 from voicebot.config import (
     LANGDETECT_MAP,
+    LANGUAGE_CODES,
     LANG_SWITCH_THRESHOLD,
     SPEECHBRAIN_LABEL_MAP,
 )
@@ -57,6 +58,7 @@ class LanguageState:
 
     # ── Idle watchdog ─────────────────────────────────────────────────────────
     are_you_there_count: int = 0   # number of "are you there?" prompts sent
+    last_detected_language: Optional[str] = None
 
     # ── End-of-call signal ───────────────────────────────────────────────────
     # Set True by TextNormalizationProcessor when the LLM emits "| END |".
@@ -73,10 +75,29 @@ class LanguageState:
     greeting_active: bool = True
 
     def __post_init__(self):
+        self.current_language = normalize_language_key(self.current_language) or self.current_language
         if self.supported_languages is None:
             self.supported_languages = [self.current_language]
-        if self.last_detected_language is None:
+        else:
+            normalized = [
+                normalize_language_key(language)
+                for language in self.supported_languages
+            ]
+            self.supported_languages = [
+                language for language in normalized if language
+            ] or [self.current_language]
+        if not self.last_detected_language:
             self.last_detected_language = self.current_language
+
+
+def normalize_language_key(raw: Optional[str]) -> Optional[str]:
+    """Normalize ISO codes / aliases to the internal long-form language key."""
+    if not raw:
+        return None
+    key = str(raw).strip().lower()
+    if not key:
+        return None
+    return LANGUAGE_CODES.get(key, key)
 
 
 def normalize_speechbrain_label(raw: str) -> Optional[str]:
@@ -114,6 +135,7 @@ def update_candidate(state: LanguageState, detected: str) -> bool:
     A detection of the current language resets the candidate (no switch needed).
     A detection of a *different* candidate restarts the count from 1.
     """
+    detected = normalize_language_key(detected) or detected
     state.last_detected_language = detected
     if detected == state.current_language:
         state.candidate_language = None

@@ -8,27 +8,31 @@ cancel TTS is suppressed.
 Two cooperating processors share a single boolean flag on LanguageState:
 
   GreetingGate (placed BETWEEN context_aggr.user() and tts):
-    Drops InterruptionFrame / UserStartedSpeakingFrame while
-    state.greeting_active is True. This stops barge-in from cancelling
-    the in-flight TTS playback of the greeting.
+    Drops InterruptionFrame while state.greeting_active is True. This stops
+    barge-in from cancelling the in-flight TTS playback of the greeting while
+    still letting user-start events flow through the pipeline.
 
-  GreetingDoneFlag (placed AFTER transport.output()):
-    Watches for the first BotStoppedSpeakingFrame and flips the flag off,
-    after which normal barge-in resumes.
+  GreetingDoneFlag (placed AFTER tts):
+    Watches for the first TTSStoppedFrame / BotStoppedSpeakingFrame and flips
+    the flag off, after which normal barge-in resumes.
 
 LanguageState must initialise greeting_active=True.
 """
 from __future__ import annotations
 
+import logging
+
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     Frame,
     InterruptionFrame,
-    UserStartedSpeakingFrame,
+    TTSStoppedFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from voicebot.state.language_state import LanguageState
+
+logger = logging.getLogger(__name__)
 
 
 class GreetingGate(FrameProcessor):
@@ -38,9 +42,7 @@ class GreetingGate(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
-        if self._state.greeting_active and isinstance(
-            frame, (InterruptionFrame, UserStartedSpeakingFrame)
-        ):
+        if self._state.greeting_active and isinstance(frame, InterruptionFrame):
             return  # swallow — TTS keeps playing the greeting
         await self.push_frame(frame, direction)
 
@@ -52,6 +54,10 @@ class GreetingDoneFlag(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
-        if self._state.greeting_active and isinstance(frame, BotStoppedSpeakingFrame):
+        if self._state.greeting_active and isinstance(
+            frame,
+            (TTSStoppedFrame, BotStoppedSpeakingFrame),
+        ):
             self._state.greeting_active = False
+            logger.info("greeting gate disabled")
         await self.push_frame(frame, direction)

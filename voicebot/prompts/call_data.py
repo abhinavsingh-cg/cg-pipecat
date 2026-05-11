@@ -18,7 +18,7 @@ DEFAULT_CALL_DATA = {
     "agent_name": "Priya",
     "agent_gender": "female",
     "applicant_name": "Ramesh Kumar",
-    "call_id": "call123",
+    "call_id": "call456",
     "current_date": _TODAY.strftime("%-d %B %Y"),
     "allowed_future_date_one": (_TODAY + timedelta(days=2)).strftime("%-d %B %Y"),
     "emi_ai_overdue_date": (_TODAY - timedelta(days=10)).strftime("%-d %B %Y"),
@@ -34,7 +34,7 @@ DEFAULT_CALL_DATA = {
     "casa_account_type": "savings",
     "previous_status": "Call Back",
     "language_supported": "Hindi, English, Telugu, Malayalam, Bengali, Marathi, Tamil",
-    "default_language": "hindi",
+    "default_language": "english",
 }
 CALL_DATA_REDIS_KEY = "call:{call_id}:data"
 

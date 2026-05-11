@@ -338,9 +338,8 @@ async def build_and_run(
 
     procs.extend([
         # Uninterruptible-greeting gate: while state.greeting_active is True,
-        # swallows InterruptionFrame / UserStartedSpeakingFrame so the deterministic
-        # first message can't be cancelled by VAD false-triggers. Bot keeps
-        # listening — STT and aggregator are upstream and run normally.
+        # swallows only InterruptionFrame so the deterministic first message
+        # can't be cancelled. User/VAD events still flow normally.
         GreetingGate(state),
 
         # Converts streaming TextFrames → OutputAudioRawFrames via the TTS vendor.
@@ -350,6 +349,11 @@ async def build_and_run(
         AssistantGeneratedAudioRecorder(assistant_speech),
         # ← GOOD INSERTION POINT: post-TTS audio processing
         # (e.g. audio normalization, logging playback duration)
+
+        # Clears the one-time greeting guard as soon as the deterministic first
+        # greeting finishes synthesizing / playing, so later assistant turns can
+        # be interrupted normally.
+        GreetingDoneFlag(state),
     ])
 
     if debug_frames:
@@ -375,10 +379,6 @@ async def build_and_run(
         EventLogger("output"),
         transport.output(),
         AssistantDeliveryRecorder(memory, assistant_speech),
-
-        # Flips state.greeting_active to False on first BotStoppedSpeakingFrame —
-        # restoring normal barge-in behaviour for the rest of the call.
-        GreetingDoneFlag(state),
 
         # Assistant-side aggregator: commits the full assistant response into
         # LLMContext AFTER it has been played out. Placed after transport.output()
