@@ -39,7 +39,8 @@ class RedisMemory:
         self.call_id = call_id
         self._client = client or aioredis.from_url(REDIS_URL, decode_responses=True)
         self._conversation_store = (
-            conversation_store or ConversationCallStore(redis_client=self._client)
+            conversation_store
+            or ConversationCallStore(redis_client=self._client, write_to_redis=False)
         )
 
     async def close(self) -> None:
@@ -70,6 +71,18 @@ class RedisMemory:
     async def append(self, role: str, content: str) -> None:
         history = await self.load()
         history.append(conversation_entry(role, content))
+        await self._save(history)
+        await self._conversation_store.publish(self.call_id, history)
+
+    async def update_last(self, role: str, content: str) -> None:
+        normalized = content.strip()
+        if not normalized:
+            return
+        history = await self.load()
+        if history and history[-1].get("role") == role:
+            history[-1]["content"] = normalized
+        else:
+            history.append(conversation_entry(role, normalized))
         await self._save(history)
         await self._conversation_store.publish(self.call_id, history)
 

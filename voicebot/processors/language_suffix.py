@@ -32,7 +32,7 @@ from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transcriptions.language import Language as PipecatLanguage
 
-from voicebot.config import LANG_SWITCH_THRESHOLD, LANG_TO_ISO, SUPPORTED_LNG_SUFFIX
+from voicebot.config import LANGUAGE_CODES, LANG_SWITCH_THRESHOLD, LANG_TO_ISO, SUPPORTED_LNG_SUFFIX
 from voicebot.state.language_state import (
     LanguageState,
     commit_switch,
@@ -112,8 +112,9 @@ class LanguageSuffixProcessor(FrameProcessor):
 
         # Vote for the STT-reported language first — it's a strong signal that
         # we should not override with a slower text-level LID guess.
-        if stt_iso and stt_iso in s.supported_languages:
-            update_candidate(s, stt_iso)
+        detected_from_stt = LANGUAGE_CODES.get(stt_iso, stt_iso) if stt_iso else None
+        if detected_from_stt and detected_from_stt in s.supported_languages:
+            update_candidate(s, detected_from_stt)
             self._maybe_commit()
 
         # Short utterances (≤3 words) are unreliable for *text* LID — skip the

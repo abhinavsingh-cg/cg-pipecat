@@ -35,38 +35,14 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from voicebot.config import ARE_YOU_THERE_MAX_STRIKES, ARE_YOU_THERE_TIMEOUT_S
+from voicebot.prompts.runtime_messages import (
+    ARE_YOU_THERE_TEXT,
+    REPEAT_MESSAGE,
+    localized_runtime_message,
+)
 from voicebot.state.language_state import LanguageState
 
 logger = logging.getLogger(__name__)
-
-# Localized "are you there?" prompts (ported from cg_voicebot/config.py:135-147).
-# CUSTOMIZE: add a language key here that matches keys in SUPPORTED_LNG_SUFFIX.
-ARE_YOU_THERE_TEXT = {
-    "english": "Hello, are you there?",
-    "hindi": "क्या आप मेरी बात सुन पा रहे हैं?",
-    "telugu": "మీరు నా మాట వినగలరా?",
-    "kannada": "ನೀವು ನನ್ನ ಮಾತು ಕೇಳುತ್ತೀರಾ?",
-    "tamil": "நீங்கள் என் பேச்சை கேட்கிறீர்களா?",
-    "bengali": "আপনি কি আমার কথা শুনতে পাচ্ছেন?",
-    "malayalam": "നിങ്ങൾ എന്റെ ശബ്ദം കേൾക്കുന്നുണ്ടോ?",
-    "marathi": "तुम्ही माझं बोलणं ऐकू शकता का?",
-    "gujarati": "શું તમે મારી વાત સાંભળી શકો છો?",
-    "punjabi": "ਕੀ ਤੁਸੀਂ ਮੇਰੀ ਗੱਲ ਸੁਣ ਸਕਦੇ ਹੋ?",
-    "urdu": "کیا آپ میری بات سن رہے ہیں؟",
-    "en": "Hello, are you there?",
-    "hi": "क्या आप मेरी बात सुन पा रहे हैं?",
-    "te": "మీరు నా మాట వినగలరా?",
-    "kn": "ನೀವು ನನ್ನ ಮಾತು ಕೇಳುತ್ತೀರಾ?",
-    "ta": "நீங்கள் என் பேச்சை கேட்கிறீர்களா?",
-    "bn": "আপনি কি আমার কথা শুনতে পাচ্ছেন?",
-    "ml": "നിങ്ങൾ എന്റെ ശബ്ദം കേൾക്കുന്നുണ്ടോ?",
-    "mr": "तुम्ही माझं बोलणं ऐकू शकता का?",
-    "gu": "શું તમે મારી વાત સાંભળી શકો છો?",
-    "pu": "ਕੀ ਤੁਸੀਂ ਮੇਰੀ ਗੱਲ ਸੁਣ ਸਕਦੇ ਹੋ?",
-    "pa": "ਕੀ ਤੁਸੀਂ ਮੇਰੀ ਗੱਲ ਸੁਣ ਸਕਦੇ ਹੋ?",
-    "ur": "کیا آپ میری بات سن رہے ہیں؟",
-
-}
 
 
 class AreYouThereWatchdog(FrameProcessor):
@@ -120,9 +96,9 @@ class AreYouThereWatchdog(FrameProcessor):
             # Max strikes reached — end the call.
             await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             return
-        text = ARE_YOU_THERE_TEXT.get(
-            self._state.current_language, ARE_YOU_THERE_TEXT["english"]
-        )
+        language_key = self._state.last_detected_language or self._state.current_language
+        messages = REPEAT_MESSAGE if self._state.are_you_there_count == 1 else ARE_YOU_THERE_TEXT
+        text = localized_runtime_message(messages, language_key)
         # TTSSpeakFrame bypasses the LLM and goes directly to the TTS service.
         # This processor sits AFTER the TTS service in the pipeline, so the
         # frame must travel UPSTREAM to reach it. Pushing downstream would

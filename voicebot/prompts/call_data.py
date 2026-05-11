@@ -18,6 +18,7 @@ DEFAULT_CALL_DATA = {
     "agent_name": "Priya",
     "agent_gender": "female",
     "applicant_name": "Ramesh Kumar",
+    "call_id": "call123",
     "current_date": _TODAY.strftime("%-d %B %Y"),
     "allowed_future_date_one": (_TODAY + timedelta(days=2)).strftime("%-d %B %Y"),
     "emi_ai_overdue_date": (_TODAY - timedelta(days=10)).strftime("%-d %B %Y"),
@@ -35,6 +36,21 @@ DEFAULT_CALL_DATA = {
     "language_supported": "Hindi, English, Telugu, Malayalam, Bengali, Marathi, Tamil",
     "default_language": "hindi",
 }
+CALL_DATA_REDIS_KEY = "call:{call_id}:data"
+
+
+def build_call_data(call_data: Optional[dict] = None) -> dict:
+    """Merge runtime call metadata over the local-dev defaults."""
+    return {**DEFAULT_CALL_DATA, **(call_data or {})}
+
+
+def get_call_data_call_id(call_data: Optional[dict] = None) -> str:
+    data = build_call_data(call_data)
+    return str(data.get("call_id") or DEFAULT_CALL_DATA["call_id"])
+
+
+def build_call_data_redis_key(call_data: Optional[dict] = None) -> str:
+    return CALL_DATA_REDIS_KEY.format(call_id=get_call_data_call_id(call_data))
 
 
 def _load_pd_si_globals() -> dict:
@@ -57,7 +73,7 @@ def build_system_prompt(call_data: Optional[dict] = None) -> str:
     Load pd_si.py's `system_prompt` and `prompt` strings and template them
     with `call_data` (defaults to DEFAULT_CALL_DATA for dev runs).
     """
-    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+    data = build_call_data(call_data)
     g = _load_pd_si_globals()
     combined = g["system_prompt"] + "\n\n" + g["prompt"]
     return combined.format(**data)
@@ -70,7 +86,7 @@ def build_first_message(call_data: Optional[dict] = None) -> str:
 
     Falls back to hindi/female if the requested combo isn't defined.
     """
-    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+    data = build_call_data(call_data)
     g = _load_pd_si_globals()
     payload = _json.loads(g["payload"])
     messages = payload["first_message"]["message"]
@@ -80,4 +96,5 @@ def build_first_message(call_data: Optional[dict] = None) -> str:
 
     by_lang = messages.get(lang) or messages.get("hindi") or next(iter(messages.values()))
     template = by_lang.get(gender) or by_lang.get("female") or next(iter(by_lang.values()))
+    import pdb; pdb.set_trace()
     return template.format(**data)

@@ -56,6 +56,7 @@ EARLY_BARGE_IN_WINDOW_S = float(os.getenv("EARLY_BARGE_IN_WINDOW_S", "0.8"))
 # Used by RedisMemory (production). WebRTC dev runner uses InMemoryMemory.
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CONTEXT_EXPIRY_SECONDS = int(os.getenv("CONTEXT_EXPIRY_SECONDS", str(24 * 60 * 60)))
+ASSISTANT_PARTIAL_UPDATE_FRAMES = int(os.getenv("ASSISTANT_PARTIAL_UPDATE_FRAMES", "20"))
 
 # ── Vendor selection ────────────────────────────────────────────────────────
 # These three vars control which service is built by the factories.
