@@ -92,7 +92,7 @@ STT_TIMEOUT_S = float(os.getenv("STT_TIMEOUT_S", "4"))
 # ── LLM model + retries ─────────────────────────────────────────────────────
 # LLM_MODEL is passed as-is to the vendor service. Groq default is the 70B
 # Llama-3.1; change to "llama-3.1-8b-instant" for lower latency.
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.1-70b-versatile")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "1.5"))
 MAX_LLM_RETRIES = int(os.getenv("MAX_LLM_RETRIES", "2"))
 
