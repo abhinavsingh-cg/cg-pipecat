@@ -112,6 +112,9 @@ class ConversationCallStore:
         return self._client
 
 
+DEFAULT_STAGE = "intro_verify"
+
+
 class ConversationMemory(Protocol):
     call_id: str
 
@@ -120,6 +123,8 @@ class ConversationMemory(Protocol):
     async def seed_if_empty(self, messages: Iterable[dict]) -> List[dict]: ...
     async def append(self, role: str, content: str) -> None: ...
     async def trim_last(self, n: int) -> int: ...
+    async def get_stage(self) -> str: ...
+    async def set_stage(self, stage: str) -> None: ...
 
 
 class InMemoryMemory:
@@ -132,6 +137,7 @@ class InMemoryMemory:
     ):
         self.call_id = call_id
         self._history: List[dict] = []
+        self._stage: str = DEFAULT_STAGE
         self._conversation_store = conversation_store or ConversationCallStore()
 
     async def close(self) -> None:
@@ -160,3 +166,9 @@ class InMemoryMemory:
         self._history = self._history[:-drop]
         await self._conversation_store.publish(self.call_id, self._history)
         return drop
+
+    async def get_stage(self) -> str:
+        return self._stage
+
+    async def set_stage(self, stage: str) -> None:
+        self._stage = stage

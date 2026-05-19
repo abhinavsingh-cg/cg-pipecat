@@ -18,11 +18,18 @@ DEFAULT_CALL_DATA = {
     "agent_name": "Priya",
     "agent_gender": "female",
     "applicant_name": "Ramesh Kumar",
+    "balance_claim_amount" : "10000",
     "current_date": _TODAY.strftime("%-d %B %Y"),
     "allowed_future_date_one": (_TODAY + timedelta(days=2)).strftime("%-d %B %Y"),
     "emi_ai_overdue_date": (_TODAY - timedelta(days=10)).strftime("%-d %B %Y"),
     "billed_emi_ai_overdue_amt": "1000",
     "emi_overdue_amt": "10000",
+    "emi_amount" : "15000",
+    "last_four_digit" : "2 3 4 5",
+    "loan_nbfc_name" : "H D F C Bank",
+    "allocation_dpd_value" : "12",
+    "date_of_default" : "2026-05-06",
+    "due_date" : "2026-05-06",
     "billed_ai_overdue_amt": "10",
     "remaining_si_emi": "62000",
     "last_4_digits_loan": "7823",
@@ -34,6 +41,7 @@ DEFAULT_CALL_DATA = {
     "previous_status": "Call Back",
     "language_supported": "Hindi, English, Telugu, Malayalam, Bengali, Marathi, Tamil",
     "default_language": "hindi",
+    "bot_name" : "Priya",
 }
 
 
@@ -54,13 +62,44 @@ def _load_pd_si_globals() -> dict:
 
 def build_system_prompt(call_data: Optional[dict] = None) -> str:
     """
-    Load pd_si.py's `system_prompt` and `prompt` strings and template them
-    with `call_data` (defaults to DEFAULT_CALL_DATA for dev runs).
+    Legacy monolithic prompt (system + full call flow). Retained for
+    downstream consumers (evaluation exports, debugging) but no longer
+    used by the live pipeline — see `build_base_prompt` / `build_stage_prompt`.
     """
     data = {**DEFAULT_CALL_DATA, **(call_data or {})}
     g = _load_pd_si_globals()
     combined = g["system_prompt"] + "\n\n" + g["prompt"]
     return combined.format(**data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node/stage prompt builders (live path). The base prompt is seeded once at
+# session start; the stage overlay is swapped in `LLMContext.messages[1]` each
+# turn by StageOverlayProcessor.
+# ─────────────────────────────────────────────────────────────────────────────
+
+INITIAL_STAGE = "intro_verify"
+
+
+def build_base_prompt(call_data: Optional[dict] = None) -> str:
+    """Static global rules — Personality, Guardrails, Language, Dates, etc."""
+    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+    g = _load_pd_si_globals()
+    return g["base_prompt"].format(**data)
+
+
+def build_stage_prompt(stage: str, call_data: Optional[dict] = None) -> str:
+    """Per-stage overlay. Falls back to INITIAL_STAGE if `stage` is unknown."""
+    data = {**DEFAULT_CALL_DATA, **(call_data or {})}
+    g = _load_pd_si_globals()
+    overlays = g["stage_overlays"]
+    overlay = overlays.get(stage) or overlays[INITIAL_STAGE]
+    return overlay.format(**data)
+
+
+def known_stages() -> tuple[str, ...]:
+    g = _load_pd_si_globals()
+    return tuple(g["STAGES"])
 
 
 def build_first_message(call_data: Optional[dict] = None) -> str:

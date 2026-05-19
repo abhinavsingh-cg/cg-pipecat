@@ -36,6 +36,11 @@ KEY CUSTOMIZATION POINTS:
 from __future__ import annotations
 
 import logging
+# Format to include 3-digit milliseconds
+logging.basicConfig(
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
+    datefmt='%H:%M:%S'
+)
 from typing import Optional
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -59,6 +64,7 @@ from voicebot.config import (
     DEFAULT_LANGUAGE,
     LANG_TO_ISO,
     SAMPLE_RATE,
+    SMART_TURN_PROB_THRESHOLD,
     STT_PRIMARY,
     SUPPORTED_LANGUAGES,
     TTS_VENDOR,
@@ -74,8 +80,15 @@ from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
+from voicebot.processors.stage_overlay import StageOverlayProcessor, StageRouterProcessor
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
-from voicebot.prompts.call_data import build_first_message, build_system_prompt
+from voicebot.processors.turn_latency import TurnLatencyTracker
+from voicebot.prompts.call_data import (
+    INITIAL_STAGE,
+    build_base_prompt,
+    build_first_message,
+    build_stage_prompt,
+)
 from voicebot.services.llm_factory import build_llm
 from voicebot.services.tts_factory import build_tts
 from voicebot.state.language_state import LanguageState
@@ -98,8 +111,32 @@ def vad_analyzer() -> SileroVADAnalyzer:
 
     Higher start_secs = fewer false triggers on noise.
     Lower stop_secs   = faster end-of-turn detection (but may clip mid-sentence).
+
+    Subclassed here to log the per-chunk voice_confidence score Silero computes.
+    A chunk is analyzed every ~32ms; we sample every Nth chunk plus log every
+    transition that crosses the configured VAD_CONFIDENCE threshold.
     """
-    return SileroVADAnalyzer(
+    class LoggingSileroVAD(SileroVADAnalyzer):
+        _LOG_EVERY_N = 5  # ~6 logs/sec at 32ms chunk rate
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._vad_log_count = 0
+            self._vad_last_above = False
+
+        def voice_confidence(self, buffer) -> float:
+            score = super().voice_confidence(buffer)
+            self._vad_log_count += 1
+            above = score >= VAD_CONFIDENCE
+            transition = above != self._vad_last_above
+            if transition or (self._vad_log_count % self._LOG_EVERY_N == 0):
+                if score  > VAD_CONFIDENCE:
+                    logger.info(
+                        f"""vad_score | score={score=} | threshold={VAD_CONFIDENCE=}""")
+            self._vad_last_above = above
+            return score
+
+    return LoggingSileroVAD(
         params=VADParams(
             confidence=VAD_CONFIDENCE,
             start_secs=VAD_MIN_SPEECH_MS / 1000.0,
@@ -120,10 +157,34 @@ def turn_analyzer():
     The caller (build_and_run) handles None gracefully.
     """
     try:
+        import time
         from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
             LocalSmartTurnAnalyzerV3,
         )
-        return LocalSmartTurnAnalyzerV3()
+
+        class LoggingSmartTurn(LocalSmartTurnAnalyzerV3):
+            def _predict_endpoint(self, audio_array):
+                sr = self.sample_rate or 16000
+                duration_s = len(audio_array) / sr
+                t0 = time.perf_counter()
+                result = super()._predict_endpoint(audio_array)
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+
+                prob = result.get("probability", 0.0)
+                original_pred = result.get("prediction", 0)
+                # Override prediction with our configured threshold (model's
+                # internal cutoff is 0.5). Lower threshold = fire turn sooner
+                # on borderline INCOMPLETE predictions.
+                overridden_pred = 1 if prob > SMART_TURN_PROB_THRESHOLD else 0
+                result["prediction"] = overridden_pred
+
+                logger.info(
+                    f"""smart_turn | in: samples={len(audio_array)=} duration_s={duration_s=} sr={sr=} | 
+                    out: probability={prob=} | model_pred={overridden_pred=} | threshold={elapsed_ms=} | """
+                )
+                return result
+
+        return LoggingSmartTurn()
     except Exception as exc:
         logger.warning("smart-turn v3 unavailable (%s) — turn detection disabled", exc)
         return None
@@ -156,7 +217,7 @@ async def build_and_run(
     lid_model=None,
     handle_sigint: bool = True,
     memory: ConversationMemory | None = None,
-    debug_frames: bool = False,
+    debug_frames: bool = True,
 ) -> None:
     # ── Shared state ─────────────────────────────────────────────────────────
     # LanguageState is a plain dataclass passed by reference to every processor
@@ -174,10 +235,31 @@ async def build_and_run(
     # (run_webrtc.py) uses InMemoryMemory.
     if memory is None:
         memory = RedisMemory(state.call_id)
+    # Two system messages: static base prompt at index 0, swappable stage
+    # overlay at index 1. StageOverlayProcessor mutates messages[1] in place
+    # each turn; StageRouterProcessor updates state.current_stage from the
+    # LLM's trailing `[[stage:xxx]]` marker.
     history = await memory.seed_if_empty([
-        {"role": "system", "content": build_system_prompt()},
+        {"role": "system", "content": build_base_prompt()},
+        {"role": "system", "content": build_stage_prompt(INITIAL_STAGE)},
     ])
-    logger.info("loaded %d history messages for call %s", len(history), state.call_id)
+    # Restore prior stage if this is a resumed call (Redis-backed).
+    try:
+        state.current_stage = await memory.get_stage()
+        logger.info(
+            "loaded %d history messages for call %s | stage=%s",
+            len(history),
+            state.call_id,
+            state.current_stage,
+        )
+    except Exception:
+        state.current_stage = INITIAL_STAGE
+    logger.info(
+        "loaded %d history messages for call %s | stage=%s",
+        len(history),
+        state.call_id,
+        state.current_stage,
+    )
 
     # ── Service instantiation ─────────────────────────────────────────────────
     # All three are selected by .env vars (STT_PRIMARY, LLM_VENDOR, TTS_VENDOR).
@@ -202,6 +284,7 @@ async def build_and_run(
         for kw, val in (("target_language_code", sarvam_code), ("language", iso)):
             try:
                 tts.update_options(**{kw: val})
+                # stt._update_settings(new)
                 logger.info(
                     "tts_language_updated | lang=%s | kwarg=%s | value=%s",
                     new,
@@ -241,6 +324,7 @@ async def build_and_run(
     # appears to "happen after the bot finishes" because nothing actually
     # interrupts the in-flight TTS.
     turn = turn_analyzer()
+    # turn = None
     stop_strategies = None
     if turn is not None:
         stop_strategies = [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
@@ -262,15 +346,18 @@ async def build_and_run(
     # position below. Common insertion points are marked with comments.
     procs = [transport.input(), EventLogger("input")]
 
-    if debug_frames:
-        # FrameTap logs every non-audio frame name at this pipeline stage.
-        # Enable with: python -m voicebot.run_webrtc --debug-frames
-        procs.append(FrameTap("input", include_audio=True))
+    # if debug_frames:
+    #     # FrameTap logs every non-audio frame name at this pipeline stage.
+    #     # Enable with: python -m voicebot.run_webrtc --debug-frames
+    #     procs.append(FrameTap("input", include_audio=True))
 
     if lid_proc is not None:
         # LID sees raw audio BEFORE STT so it doesn't block the transcript.
         # It updates LanguageState.candidate_language as a side-effect.
         procs.append(lid_proc)
+
+    # if debug_frames:
+    #     procs.append(FrameTap("pre-stt"))
 
     procs.append(stt)
     # Note: TranscriptionFrame.language may carry a region suffix from some
@@ -281,8 +368,8 @@ async def build_and_run(
     # ← GOOD INSERTION POINT: post-STT transcript manipulation
     # (e.g. profanity filter, custom LID fallback)
 
-    if debug_frames:
-        procs.append(FrameTap("post-stt"))
+    # if debug_frames:
+    #     procs.append(FrameTap("post-stt"))
 
     procs.extend([
         # EarlyBargeInConcatProcessor is disabled by default.
@@ -303,18 +390,33 @@ async def build_and_run(
         # User-side LLM aggregator: collects transcript, manages LLMContext,
         # fires the LLM on UserStoppedSpeakingFrame. VAD runs inside here.
         context_aggr.user(),
-        llm,
+
+        # Swaps LLMContext.messages[1] to the current-stage overlay just
+        # before each LLM call. Must sit AFTER context_aggr.user() (so the
+        # user turn is already appended) and BEFORE the LLM.
+        StageOverlayProcessor(state, context),
+    ])
+
+    # if debug_frames:
+    #     procs.append(FrameTap("post-context-aggr"))
+
+            
+    procs.extend([llm,
+        # Strips the trailing `[[stage:xxx]]` marker before downstream
+        # processors / TTS see it, and commits the parsed stage to state +
+        # memory on LLMFullResponseEndFrame.
+        StageRouterProcessor(state, memory),
         # ← GOOD INSERTION POINT: post-LLM text processing
         # (e.g. response filter, SSML injection, language-specific post-processing)
         TextNormalizationProcessor(lang="en", state=state)
     ])
 
-    if debug_frames:
-        procs.append(FrameTap("post-llm"))
+    # if debug_frames:
+    #     procs.append(FrameTap("post-llm"))
 
     procs.extend([
         # Accumulates LLM TextFrames into a full response, then appends to Redis.
-        RedisAssistantRecorder(memory),
+        # RedisAssistantRecorder(memory),
 
         # Uninterruptible-greeting gate: while state.greeting_active is True,
         # swallows InterruptionFrame / UserStartedSpeakingFrame so the deterministic
@@ -328,8 +430,8 @@ async def build_and_run(
         # (e.g. audio normalization, logging playback duration)
     ])
 
-    if debug_frames:
-        procs.append(FrameTap("post-tts", include_audio=True))
+    # if debug_frames:
+    #     procs.append(FrameTap("post-tts", include_audio=True))
 
     procs.extend([
         # Idle watchdog: emits ARE_YOU_THERE_TEXT after ARE_YOU_THERE_TIMEOUT_S
@@ -343,7 +445,11 @@ async def build_and_run(
         # hook + EndFrame.
         EndCallTrigger(state),
 
-        EventLogger("output"),
+        # Per-turn latency summary: logs one TURN_LATENCY line per turn with
+        # vad+turn / stt / llm_ttfb / llm_total / tts_ttfb / bot_start / TOTAL.
+        TurnLatencyTracker(),
+
+        # EventLogger("output"),
         transport.output(),
 
         # Flips state.greeting_active to False on first BotStoppedSpeakingFrame —
@@ -366,7 +472,7 @@ async def build_and_run(
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            allow_interruptions=True,
+            # allow_interruptions=True,
             enable_metrics=True,
             enable_usage_metrics=True,
             audio_in_sample_rate=SAMPLE_RATE,

@@ -107,7 +107,8 @@ class TextNormalizationProcessor(FrameProcessor):
     def _resolve_num2words_lang(self) -> Optional[str]:
         if self._state is None:
             return self._lang
-        codes = LANGUAGE_TO_CODES.get(self._state.current_language)
+        # codes = LANGUAGE_TO_CODES.get(self._state.current_language)
+        codes = self._state.current_language
         return codes if codes else self._lang
 
     async def _flush_pending(self, direction: FrameDirection) -> None:
@@ -178,7 +179,7 @@ class TextNormalizationProcessor(FrameProcessor):
         # then normalize the safe prefix and emit.
         if isinstance(frame, TextFrame) and frame.text:
             current_lang = self._state.current_language if self._state else "unknown"
-            logger.info("llm_text | text=%r | current_lang=%s", frame.text, current_lang)
+            # logger.info("llm_text | text=%r | current_lang=%s", frame.text, current_lang)
 
             combined = self._pending + frame.text
 

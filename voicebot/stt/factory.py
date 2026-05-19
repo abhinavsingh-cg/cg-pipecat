@@ -64,17 +64,25 @@ def build_stt(state: LanguageState) -> STTService:
             model=SARVAM_STT_MODEL,
             mode="transcribe",
             sample_rate=SARVAM_STT_SAMPLE_RATE,
-            params=SarvamSTTService.InputParams(language=None),
+            vad_signals = True,
+            params=SarvamSTTService.InputParams(language=None, vad_signals = True)
         )
     if vendor == "deepgram":
-        from pipecat.services.deepgram.stt import DeepgramSTTService  # type: ignore
-        # Deepgram takes a fixed language at construction time. If you need
-        # dynamic language switching mid-call, you'll need to rebuild the
-        # service on each switch (which requires replacing it in the pipeline).
+        from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions  # type: ignore
+        # Pipecat 1.1.0 moved model/language into LiveOptions; top-level kwargs
+        # like `model=` and `detect_language=` are silently ignored and the
+        # service falls back to nova-3-general + Language.EN. For nova-3
+        # multilingual transcription, set language="multi" (Deepgram replaced
+        # `detect_language` with this for nova-3).
         return DeepgramSTTService(
             api_key=DEEPGRAM_API_KEY,
-            model=DEEPGRAM_STT_MODEL,
-            language=_pipecat_language(state.current_language),
+            live_options=LiveOptions(
+                model=DEEPGRAM_STT_MODEL,
+                language="multi",
+                # smart_format=True,
+                # punctuate=True,
+                interim_results=True,
+            ),
         )
     if vendor in ("credgenics", "credgenics_http"):
         # Internal non-streaming STT — see stt/credgenics_http.py for the

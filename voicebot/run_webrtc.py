@@ -28,6 +28,11 @@ from voicebot.state.memory import InMemoryMemory
 
 logger = logging.getLogger("voicebot.webrtc")
 
+logging.basicConfig(
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
+    datefmt='%H:%M:%S'
+)
+
 _HTML = """\
 <!doctype html>
 <html><head><meta charset="utf-8"><title>voicebot dev</title></head>

@@ -83,6 +83,7 @@ def build_tts(language_key: str) -> TTSService:
         # model determines the language. For multilingual calls, pick a
         # multilingual voice (e.g. "eleven_multilingual_v2").
         return ElevenLabsTTSService(
+            model = "eleven_flash_v2_5",
             api_key=ELEVEN_API_KEY,
             voice_id=ELEVENLABS_VOICE_ID,
         )

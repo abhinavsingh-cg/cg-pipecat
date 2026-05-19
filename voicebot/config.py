@@ -36,8 +36,15 @@ SSRC = 12345678                  # fixed SSRC for outbound stream (arbitrary)
 # Raise VAD_MIN_SILENCE_MS if the bot triggers too early on pauses.
 # Lower VAD_MIN_SPEECH_MS if it misses very short utterances.
 VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "500"))
-VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "200"))
-VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.8"))
+VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "100"))
+VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.7"))
+
+# Smart Turn probability cutoff. The v3 model's native cutoff is 0.5.
+# Lowering this makes Smart Turn more eager to call a turn COMPLETE — i.e.
+# fire the rest of the pipeline even on borderline INCOMPLETE predictions.
+# Range: [0.0, 1.0]. 0.5 = model default, 0.3 = aggressive (fire fast),
+# 0.7 = conservative (wait for clear end-of-turn).
+SMART_TURN_PROB_THRESHOLD = float(os.getenv("SMART_TURN_PROB_THRESHOLD", "0.3"))
 
 # ── Idle / "are you there?" ──────────────────────────────────────────────────
 # After ARE_YOU_THERE_TIMEOUT_S of silence the bot asks "are you there?".
@@ -91,7 +98,7 @@ STT_TIMEOUT_S = float(os.getenv("STT_TIMEOUT_S", "4"))
 # ── LLM model + retries ─────────────────────────────────────────────────────
 # LLM_MODEL is passed as-is to the vendor service. Groq default is the 70B
 # Llama-3.1; change to "llama-3.1-8b-instant" for lower latency.
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.1-70b-versatile")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "1.5"))
 MAX_LLM_RETRIES = int(os.getenv("MAX_LLM_RETRIES", "2"))
 
@@ -108,7 +115,7 @@ SARVAM_TTS_TEMPERATURE = float(os.getenv("SARVAM_TTS_TEMPERATURE", "0.6"))
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3")
 # Sarvam STT requires 16 kHz input; the service resamples internally from 8 kHz.
 SARVAM_STT_SAMPLE_RATE = int(os.getenv("SARVAM_STT_SAMPLE_RATE", "16000"))
-DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-2")
+DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3")
 
 # ── Language ────────────────────────────────────────────────────────────────
 # DEFAULT_LANGUAGE must be a key in SUPPORTED_LNG_SUFFIX below.

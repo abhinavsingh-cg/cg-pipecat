@@ -63,6 +63,12 @@ class LanguageState:
     # BotStoppedSpeakingFrame.
     end_after_speech: bool = False
 
+    # ── Node/stage tracking (see prompts/pd_si.py STAGES) ────────────────────
+    # Updated by StageRouterProcessor when the LLM emits a trailing
+    # `[[stage:xxx]]` marker. Read by StageOverlayProcessor to swap the system
+    # overlay in LLMContext.messages[1] before each LLM call.
+    current_stage: str = "intro_verify"
+
     # ── Greeting gate ─────────────────────────────────────────────────────────
     # True from call start until the first BotStoppedSpeakingFrame fires.
     # While True, GreetingGate swallows InterruptionFrame /

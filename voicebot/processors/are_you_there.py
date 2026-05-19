@@ -31,6 +31,7 @@ from pipecat.frames.frames import (
     StartFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -86,6 +87,15 @@ class AreYouThereWatchdog(FrameProcessor):
             # User is active — reset strike counter and restart idle timer.
             self._state.are_you_there_count = 0
             self._reset_timer()
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            # User just finished — LLM is about to respond. Cancel the idle
+            # timer so the watchdog can't fire while STT+LLM+TTS is processing
+            # (which would queue "are you there?" right next to the real
+            # response and play them back-to-back). BotStartedSpeakingFrame
+            # would otherwise be the next signal, but it can arrive after
+            # ARE_YOU_THERE_TIMEOUT_S on slow turns. Timer rearms on
+            # BotStoppedSpeakingFrame once the bot's reply finishes playing.
+            self._cancel_timer()
         elif isinstance(frame, BotStartedSpeakingFrame):
             # Don't fire "are you there?" while the bot is talking.
             self._bot_speaking = True
