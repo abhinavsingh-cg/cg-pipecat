@@ -82,11 +82,19 @@ def build_tts(language_key: str) -> TTSService:
         # ElevenLabs doesn't natively support language switching — the voice
         # model determines the language. For multilingual calls, pick a
         # multilingual voice (e.g. "eleven_multilingual_v2").
+        # return ElevenLabsTTSService(
+        #     model = "eleven_flash_v2_5",
+        #     api_key=ELEVEN_API_KEY,
+        #     voice_id=ELEVENLABS_VOICE_ID,
+        # )
         return ElevenLabsTTSService(
-            model = "eleven_flash_v2_5",
+            model="eleven_flash_v2_5",
             api_key=ELEVEN_API_KEY,
             voice_id=ELEVENLABS_VOICE_ID,
-        )
+            params=ElevenLabsTTSService.InputParams(
+                chunk_length_schedule=[10, 90, 120, 150],  # or even [30, 60, ...]
+            ),  
+        )    
     if vendor == "cartesia":
         from pipecat.services.cartesia.tts import CartesiaTTSService  # type: ignore
         return CartesiaTTSService(

@@ -35,7 +35,7 @@ SSRC = 12345678                  # fixed SSRC for outbound stream (arbitrary)
 # These tune Silero VAD (pipeline.vad_analyzer) AND Smart Turn's timeout.
 # Raise VAD_MIN_SILENCE_MS if the bot triggers too early on pauses.
 # Lower VAD_MIN_SPEECH_MS if it misses very short utterances.
-VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "500"))
+VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "100"))
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "100"))
 VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.7"))
 
@@ -57,6 +57,14 @@ ARE_YOU_THERE_MAX_STRIKES = int(os.getenv("ARE_YOU_THERE_MAX_STRIKES", "3"))
 # previous user transcript is stashed and prepended to the next utterance.
 # EarlyBargeInConcatProcessor must be un-commented in pipeline.py to use this.
 EARLY_BARGE_IN_WINDOW_S = float(os.getenv("EARLY_BARGE_IN_WINDOW_S", "0.8"))
+
+# ── Prefix filler ───────────────────────────────────────────────────────────
+# When True, FillerInjectorProcessor emits a short language-matched TTS
+# utterance ("हाँ", "okay", "एक सेकंड") the moment UserStoppedSpeakingFrame
+# fires — masking LLM TTFB. Disable to A/B test or for debugging.
+FILLER_ENABLED = os.getenv("FILLER_ENABLED", "true").lower() in ("1", "true", "yes")
+# Probability that a filler fires on any given turn. 1.0 = every turn.
+FILLER_PROBABILITY = float(os.getenv("FILLER_PROBABILITY", "1.0"))
 
 # ── Redis / conversation memory ─────────────────────────────────────────────
 # Schema: call:{call_id}:data → JSON list of {role, content, timestamp}

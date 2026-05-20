@@ -41,6 +41,13 @@ logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
     datefmt='%H:%M:%S'
 )
+# Silence noisy loggers while debugging latency. Comment out individually to
+# bring any of them back.
+logging.getLogger("pipecat.transports.smallwebrtc.connection").setLevel(logging.ERROR)
+logging.getLogger("pipecat.transports.smallwebrtc.transport").setLevel(logging.WARNING)
+logging.getLogger("aioice").setLevel(logging.WARNING)
+logging.getLogger("aiortc").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)  # silence Groq HTTP 200 OK lines
 from typing import Optional
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -72,9 +79,11 @@ from voicebot.config import (
     VAD_MIN_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
 )
+from voicebot.processors.aggregator_probe import AggregatorLatencyProbe
 from voicebot.processors.are_you_there import AreYouThereWatchdog
 from voicebot.processors.early_barge_in import EarlyBargeInConcatProcessor
 from voicebot.processors.end_call import EndCallTrigger
+from voicebot.processors.filler_injector import FillerInjectorProcessor
 from voicebot.processors.event_logger import EventLogger
 from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
@@ -82,7 +91,7 @@ from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
 from voicebot.processors.stage_overlay import StageOverlayProcessor, StageRouterProcessor
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
-from voicebot.processors.turn_latency import TurnLatencyTracker
+from voicebot.processors.turn_latency import LLMTimingProbe, TurnLatencyTracker, _Shared as _LatencyShared
 from voicebot.prompts.call_data import (
     INITIAL_STAGE,
     build_base_prompt,
@@ -126,13 +135,13 @@ def vad_analyzer() -> SileroVADAnalyzer:
 
         def voice_confidence(self, buffer) -> float:
             score = super().voice_confidence(buffer)
-            self._vad_log_count += 1
-            above = score >= VAD_CONFIDENCE
-            transition = above != self._vad_last_above
-            if transition or (self._vad_log_count % self._LOG_EVERY_N == 0):
-                if score  > VAD_CONFIDENCE:
-                    logger.info(
-                        f"""vad_score | score={score=} | threshold={VAD_CONFIDENCE=}""")
+            s = float(score.item() if hasattr(score, "item") else score)
+            above = s >= VAD_CONFIDENCE
+            # Log only on transitions (silence → speech, speech → silence) —
+            # avoids the ~6 logs/sec firehose during long utterances.
+            if above != self._vad_last_above:
+                logger.info("vad_transition | %s | score=%.2f | threshold=%.2f",
+                            "speech" if above else "silence", s, VAD_CONFIDENCE)
             self._vad_last_above = above
             return score
 
@@ -323,8 +332,8 @@ async def build_and_run(
     # LLM aggregator never broadcasts an InterruptionFrame — i.e. barge-in
     # appears to "happen after the bot finishes" because nothing actually
     # interrupts the in-flight TTS.
-    turn = turn_analyzer()
-    # turn = None
+    # turn = turn_analyzer()
+    turn = None  # A/B: smart turn disabled — UserStoppedSpeakingFrame now fires on pure VAD silence
     stop_strategies = None
     if turn is not None:
         stop_strategies = [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
@@ -337,6 +346,11 @@ async def build_and_run(
         user_turn_strategies=user_turn_strategies,
     )
     context_aggr = LLMContextAggregatorPair(context, user_params=user_params)
+
+    # Debug-only: instantiate to time frames across context_aggr.user(). Drop
+    # `.pre()` / `.post()` around it in the procs list when investigating
+    # aggregator latency.
+    _aggr_user_probe = AggregatorLatencyProbe("context_aggr_user")
 
     # ── Pipeline assembly ─────────────────────────────────────────────────────
     # Processors are chained in order. Frames flow downstream unless a processor
@@ -389,7 +403,16 @@ async def build_and_run(
 
         # User-side LLM aggregator: collects transcript, manages LLMContext,
         # fires the LLM on UserStoppedSpeakingFrame. VAD runs inside here.
+        # Re-wrap with `_aggr_user_probe.pre()` / `.post()` to debug latency
+        # through this stage (see processors/aggregator_probe.py).
         context_aggr.user(),
+
+        # Fires a short language-matched TTS phrase ("हाँ", "okay", "एक सेकंड")
+        # the instant UserStoppedSpeakingFrame fires — masks LLM TTFB so the
+        # caller hears something within ~150ms of finishing their turn. The
+        # filler bypasses LLM and LLMContext; the LLM response queues behind
+        # it in TTS and plays seamlessly after.
+        # FillerInjectorProcessor(state),
 
         # Swaps LLMContext.messages[1] to the current-stage overlay just
         # before each LLM call. Must sit AFTER context_aggr.user() (so the
@@ -401,7 +424,11 @@ async def build_and_run(
     #     procs.append(FrameTap("post-context-aggr"))
 
             
+    _latency_shared = _LatencyShared()
     procs.extend([llm,
+        # Captures true LLM stream start/end BEFORE TTS holds the End frame
+        # as a flush signal. Shares timestamps with TurnLatencyTracker below.
+        LLMTimingProbe(_latency_shared),
         # Strips the trailing `[[stage:xxx]]` marker before downstream
         # processors / TTS see it, and commits the parsed stage to state +
         # memory on LLMFullResponseEndFrame.
@@ -447,7 +474,7 @@ async def build_and_run(
 
         # Per-turn latency summary: logs one TURN_LATENCY line per turn with
         # vad+turn / stt / llm_ttfb / llm_total / tts_ttfb / bot_start / TOTAL.
-        TurnLatencyTracker(),
+        TurnLatencyTracker(_latency_shared),
 
         # EventLogger("output"),
         transport.output(),

@@ -104,7 +104,7 @@ class StageOverlayProcessor(FrameProcessor):
                 logger.warning("stage_overlay_skip | messages[1] not mutable: %r", type(slot))
                 return
         self._last_written_stage = stage
-        logger.info(f"""{overlay=},{self._context.messages=}""")
+        # logger.info(f"""{overlay=},{self._context.messages=}""")
         logger.info("stage_overlay_applied | stage=%s", stage)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -139,6 +139,7 @@ class StageRouterProcessor(FrameProcessor):
             if not m:
                 break
             stage = m.group(1).strip().lower()
+            # logger.info(f"{cleaned=},{stage=}")    
             if stage in self._valid_stages:
                 last_stage = stage
             else:
@@ -155,7 +156,9 @@ class StageRouterProcessor(FrameProcessor):
         cut = len(self._buffer) - _LOOKBACK
         emit, hold = self._buffer[:cut], self._buffer[cut:]
         # First check if the emit portion contains any complete markers.
+        # logger.info(f"{emit=},{hold=}")    
         emit, stage = self._extract_markers(emit)
+        # logger.info(f"new: {emit=},{hold=}")    
         if stage:
             self._pending_stage = stage
         self._buffer = hold
@@ -213,6 +216,7 @@ class StageRouterProcessor(FrameProcessor):
             return
 
         if isinstance(frame, TextFrame) and frame.text:
+            # logger.info(f"""{frame=}""")
             self._buffer += frame.text
             await self._emit_safe_prefix(direction)
             return

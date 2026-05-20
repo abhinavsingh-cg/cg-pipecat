@@ -38,7 +38,7 @@ def build_llm() -> LLMService:
     vendor = LLM_VENDOR
     if vendor == "groq":
         from pipecat.services.groq.llm import GroqLLMService  # type: ignore
-        return GroqLLMService(api_key=GROQ_API_KEY, model=LLM_MODEL)
+        return GroqLLMService(api_key=GROQ_API_KEY, model=LLM_MODEL, reasoning_format="parsed", include_reasoning =  False)
     if vendor == "openai":
         from pipecat.services.openai.llm import OpenAILLMService  # type: ignore
         return OpenAILLMService(api_key=OPENAI_API_KEY, model=LLM_MODEL)
