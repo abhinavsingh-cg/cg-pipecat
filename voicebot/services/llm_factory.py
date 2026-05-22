@@ -18,6 +18,7 @@ from pipecat.services.llm_service import LLMService
 from voicebot.config import (
     AWS_BEDROCK_API_KEY,
     AWS_BEDROCK_REGION,
+    GOOGLE_API_KEY,
     GROQ_API_KEY,
     LLM_MODEL,
     LLM_VENDOR,
@@ -52,4 +53,10 @@ def build_llm() -> LLMService:
     if vendor == "sarvam":
         from pipecat.services.sarvam.llm import SarvamLLMService  # type: ignore
         return SarvamLLMService(api_key=SARVAM_LLM_API_KEY, model=LLM_MODEL)
+    if vendor == "google":
+        from pipecat.services.google.llm import GoogleLLMService  # type: ignore
+        return GoogleLLMService(
+            api_key=GOOGLE_API_KEY,
+            model=LLM_MODEL,
+        )
     raise ValueError(f"Unknown LLM_VENDOR={vendor!r}")

@@ -75,7 +75,7 @@ CONTEXT_EXPIRY_SECONDS = int(os.getenv("CONTEXT_EXPIRY_SECONDS", str(24 * 60 * 6
 # ── Vendor selection ────────────────────────────────────────────────────────
 # These three vars control which service is built by the factories.
 # Adding a new vendor: edit the matching factory file and add a new branch.
-LLM_VENDOR = os.getenv("LLM_VENDOR", "groq").lower()    # groq | openai | bedrock | sarvam
+LLM_VENDOR = os.getenv("LLM_VENDOR", "groq").lower()    # groq | openai | bedrock | sarvam | google
 TTS_VENDOR = os.getenv("TTS_VENDOR", "sarvam").lower()  # sarvam | elevenlabs | cartesia
 STT_PRIMARY = os.getenv("STT_PRIMARY", "sarvam").lower() # sarvam | deepgram | credgenics_http
 STT_FALLBACK_CHAIN = [v.strip() for v in os.getenv(
@@ -95,6 +95,7 @@ CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", "")
 AWS_BEDROCK_REGION = os.getenv("AWS_BEDROCK_REGION", "us-east-1")
 AWS_BEDROCK_API_KEY = os.getenv("AWS_BEDROCK_API_KEY", "")
 SARVAM_LLM_API_KEY = os.getenv("SARVAM_LLM_API_KEY", SARVAM_API_KEY)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 # ── Internal Credgenics HTTP STT ─────────────────────────────────────────────
 # POST {STT_BASE_URL}/transcribe with form fields: audio, current_language,

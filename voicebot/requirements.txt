@@ -40,6 +40,7 @@ frozenlist==1.8.0
 fsspec==2026.4.0
 future==1.0.0
 google-crc32c==1.8.0
+google-genai==1.19.0
 groq==1.2.0
 grpcio==1.80.0
 h11==0.16.0

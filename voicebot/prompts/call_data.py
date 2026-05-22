@@ -11,6 +11,7 @@ import json as _json
 import os
 from datetime import date, timedelta
 from typing import Optional
+import requests
 
 _TODAY = date.today()
 
@@ -42,12 +43,16 @@ DEFAULT_CALL_DATA = {
     "language_supported": "Hindi, English, Telugu, Malayalam, Bengali, Marathi, Tamil",
     "default_language": "hindi",
     "bot_name" : "Priya",
+    "vb_product" : "Bike loan"
 }
 
 
 def _load_pd_si_globals() -> dict:
     """Exec pd_si.py with stub globals and return its module namespace."""
-    pd_si_path = os.path.join(os.path.dirname(__file__), "pd_si.py")
+
+    pd_si_path = os.path.join(os.path.dirname(__file__), "stage_hindi_nach.py")
+    # os.path.dirname(__file__) == '/Users/admin/Desktop/08_Projects_Group/CODES/pipecat-voicebot/voicebot/cg-pipecat_latest/cg-pipecat/voicebot/prompts' 
+    
     with open(pd_si_path, "r", encoding="utf-8") as fh:
         source = fh.read()
     stub_globals = {

@@ -61,7 +61,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.frames.frames import TTSSpeakFrame
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_stop import (
+    SpeechTimeoutUserTurnStopStrategy,
+    TurnAnalyzerUserTurnStopStrategy,
+)
 from pipecat.turns.user_turn_strategies import (
     UserTurnStrategies,
     default_user_turn_start_strategies,
@@ -332,14 +335,12 @@ async def build_and_run(
     # LLM aggregator never broadcasts an InterruptionFrame — i.e. barge-in
     # appears to "happen after the bot finishes" because nothing actually
     # interrupts the in-flight TTS.
-    # turn = turn_analyzer()
-    turn = None  # A/B: smart turn disabled — UserStoppedSpeakingFrame now fires on pure VAD silence
-    stop_strategies = None
-    if turn is not None:
-        stop_strategies = [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
+    # Smart turn disabled. Use SpeechTimeout instead: waits user_speech_timeout
+    # after VAD silence, then gates on STT finalization.  Bypasses the ML
+    # model in LocalSmartTurnAnalyzerV3 that added ~1s latency.
     user_turn_strategies = UserTurnStrategies(
         start=default_user_turn_start_strategies(),
-        stop=stop_strategies,
+        stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.3)],
     )
     user_params = LLMUserAggregatorParams(
         vad_analyzer=vad_analyzer(),
