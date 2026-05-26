@@ -73,7 +73,7 @@ class LanguageSuffixProcessor(FrameProcessor):
 
     def _maybe_commit(self) -> None:
         s = self._state
-        if s.candidate_language and s.candidate_count >= LANG_SWITCH_THRESHOLD:
+        if s.candidate_language != s.current_language and s.candidate_count >= LANG_SWITCH_THRESHOLD:
             old = s.current_language
             new = commit_switch(s)
             logger.info("language switch: %s -> %s at turn %d", old, new, s.turn_count)
@@ -99,6 +99,8 @@ class LanguageSuffixProcessor(FrameProcessor):
         frame.text = f"{frame.text}{suffix}"
 
     def _handle(self, frame: TranscriptionFrame) -> None:
+        import time
+        t0 = time.perf_counter()
         s = self._state
         s.turn_count += 1
 
@@ -109,25 +111,42 @@ class LanguageSuffixProcessor(FrameProcessor):
             s.current_language,
             s.turn_count,
         )
+        t_after_log = time.perf_counter()
+
+        # Short utterances (≤3 words) are unreliable for language detection —
+        # both STT and text-level LID frequently misclassify them on Hinglish
+        # ("Yes, madam.", "haan ji"). Skip all switching logic; keep the
+        # current language and just inject its suffix.
+        is_short = len(frame.text.split()) <= 3
+        if is_short:
+            self._inject(frame, note="short-utterance")
+            logger.info(
+                "lsp_timing | total=%.1fms | path=short_no_switch",
+                (time.perf_counter() - t0) * 1000,
+            )
+            return
 
         # Vote for the STT-reported language first — it's a strong signal that
         # we should not override with a slower text-level LID guess.
         if stt_iso and stt_iso in s.supported_languages:
             update_candidate(s, stt_iso)
             self._maybe_commit()
-
-        # Short utterances (≤3 words) are unreliable for *text* LID — skip the
-        # langdetect fallback. The STT vote above still applies.
-        if len(frame.text.split()) <= 3:
-            self._inject(frame, note="short-utterance")
-            return
+        t_after_commit = time.perf_counter()
 
         # Text-level LID fallback: only fires if neither the STT nor the
         # SpeechBrain LIDProcessor have proposed a candidate yet.
-        if not s.candidate_language:
-            fallback = detect_language_from_text(frame.text)
-            if fallback and fallback in s.supported_languages:
-                update_candidate(s, fallback)
-                self._maybe_commit()
+        # t_langdetect = 0.0
+        # if not s.candidate_language:
+        #     t_ld0 = time.perf_counter()
+        #     fallback = detect_language_from_text(frame.text)
+        #     t_langdetect = (time.perf_counter() - t_ld0) * 1000
+        #     if fallback and fallback in s.supported_languages:
+        #         update_candidate(s, fallback)
+        #         self._maybe_commit()
 
         self._inject(frame)
+        logger.info(
+            "lsp_timing | total=%.1fms | commit=%.1fms ",
+            (time.perf_counter() - t0) * 1000,
+            (t_after_commit - t_after_log) * 1000,
+        )

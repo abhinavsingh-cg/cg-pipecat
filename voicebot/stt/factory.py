@@ -55,18 +55,44 @@ def build_stt(state: LanguageState) -> STTService:
     """
     vendor = STT_PRIMARY
     if vendor == "sarvam":
+        import time, logging as _lg
+        _log = _lg.getLogger("voicebot")
         from pipecat.services.sarvam.stt import SarvamSTTService  # type: ignore
-        # language=None → Sarvam performs server-side language auto-detection.
-        # Set language=_pipecat_language(state.current_language) if you want
-        # to force a specific language and skip auto-detection.
-        return SarvamSTTService(
+        t0 = time.perf_counter()
+        svc = SarvamSTTService(
             api_key=SARVAM_API_KEY,
             model=SARVAM_STT_MODEL,
             mode="transcribe",
             sample_rate=SARVAM_STT_SAMPLE_RATE,
             vad_signals = True,
-            params=SarvamSTTService.InputParams(language=None, vad_signals = True)
+            params=SarvamSTTService.InputParams(
+                language=None,
+                vad_signals=True,
+                high_vad_sensitivity=True,   # cut server-side END_SPEECH lag
+            )
         )
+        _log.info("sarvam_stt_init | %.0fms", (time.perf_counter() - t0) * 1000)
+
+        # Tag every UserStartedSpeakingFrame / UserStoppedSpeakingFrame that
+        # Sarvam itself broadcasts (from its events-channel END_SPEECH /
+        # START_SPEECH signals), so we can tell them apart from the strategy's
+        # trigger_user_turn_stopped() emissions in the log.
+        from pipecat.frames.frames import (
+            UserStartedSpeakingFrame as _UStart,
+            UserStoppedSpeakingFrame as _UStop,
+        )
+        _orig_broadcast = svc.broadcast_frame
+        async def _tagged_broadcast(frame_cls, *args, **kwargs):
+            try:
+                if frame_cls is _UStop:
+                    _log.info("sarvam_emit | UserStoppedSpeakingFrame (END_SPEECH)")
+                elif frame_cls is _UStart:
+                    _log.info("sarvam_emit | UserStartedSpeakingFrame (START_SPEECH)")
+            except Exception:
+                pass
+            return await _orig_broadcast(frame_cls, *args, **kwargs)
+        svc.broadcast_frame = _tagged_broadcast
+        return svc
     if vendor == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions  # type: ignore
         # Pipecat 1.1.0 moved model/language into LiveOptions; top-level kwargs

@@ -157,6 +157,7 @@ class InMemoryMemory:
 
     async def append(self, role: str, content: str) -> None:
         self._history.append(conversation_entry(role, content))
+        # conversation_logger.info(f"""{self._history=}""")
         await self._conversation_store.publish(self.call_id, self._history)
 
     async def trim_last(self, n: int) -> int:

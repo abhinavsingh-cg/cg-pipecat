@@ -61,14 +61,20 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.frames.frames import TTSSpeakFrame
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_stop import (
+    SpeechTimeoutUserTurnStopStrategy,
+    TurnAnalyzerUserTurnStopStrategy,
+)
 from pipecat.turns.user_turn_strategies import (
     UserTurnStrategies,
     default_user_turn_start_strategies,
 )
 
+from voicebot.turns.early_user_stop import EarlyTranscriptionUserTurnStopStrategy
+
 from voicebot.config import (
     DEFAULT_LANGUAGE,
+    EARLY_TRIGGER_MIN_CONF,
     LANG_TO_ISO,
     SAMPLE_RATE,
     SMART_TURN_PROB_THRESHOLD,
@@ -324,6 +330,7 @@ async def build_and_run(
     context = LLMContext(messages=[
         {"role": m["role"], "content": m["content"]} for m in history
     ])
+    # logger.info(f"""{context.messages=}""")
 
     # In Pipecat 1.1, VAD + Smart Turn are wired through the user aggregator,
     # NOT through TransportParams (those fields don't exist there and get
@@ -333,13 +340,24 @@ async def build_and_run(
     # appears to "happen after the bot finishes" because nothing actually
     # interrupts the in-flight TTS.
     # turn = turn_analyzer()
-    turn = None  # A/B: smart turn disabled — UserStoppedSpeakingFrame now fires on pure VAD silence
-    stop_strategies = None
-    if turn is not None:
-        stop_strategies = [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
+    # turn = None  # A/B: smart turn disabled
+    # if turn is not None:
+    #     stop_strategies = [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
+    # else:
+    #     # Pure-VAD path: passing stop=None would silently re-instantiate
+    #     # LocalSmartTurnAnalyzerV3 via default_user_turn_stop_strategies().
+    #     # SpeechTimeoutUserTurnStopStrategy waits user_speech_timeout after
+    #     # VADUserStoppedSpeakingFrame (gated on at least one transcript) —
+    #     # no neural classifier, no multi-second confirmation window.
+    #     stop_strategies = [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.01)]
     user_turn_strategies = UserTurnStrategies(
         start=default_user_turn_start_strategies(),
-        stop=stop_strategies,
+        stop=[
+            EarlyTranscriptionUserTurnStopStrategy(
+                user_speech_timeout=2,
+                min_confidence=EARLY_TRIGGER_MIN_CONF,
+            )
+        ],
     )
     user_params = LLMUserAggregatorParams(
         vad_analyzer=vad_analyzer(),
@@ -513,7 +531,7 @@ async def build_and_run(
     # bypasses the LLM entirely. GreetingGate keeps it uninterruptible until
     # the bot finishes speaking.
     greeting = build_first_message()
-    await task.queue_frames([TTSSpeakFrame(greeting)])
+    await task.queue_frames([TTSSpeakFrame(greeting, append_to_context=True)])
     # Persist as the first assistant turn so the LLM context reflects what
     # was actually said, and the LLM doesn't repeat the introduction.
     await memory.append("assistant", greeting)

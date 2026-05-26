@@ -86,11 +86,16 @@ class CredgenicsHTTPSTTService(STTService):
         if not transcript:
             return
         detected = payload.get("language") or self._state.current_language
+        # finalized=True short-circuits SpeechTimeoutUserTurnStopStrategy's
+        # stt_timeout safety net. Without it, the strategy emits a second
+        # UserStoppedSpeakingFrame when stt_timeout elapses, even though the
+        # transcript already arrived — causing duplicate turn-stop events.
         yield TranscriptionFrame(
             text=transcript,
             user_id="",
             timestamp="",
             language=_pipecat_language(detected),
+            finalized=True,
         )
 
 

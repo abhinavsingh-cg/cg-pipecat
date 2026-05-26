@@ -39,6 +39,11 @@ VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "100"))
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "100"))
 VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.7"))
 
+# EarlyTranscriptionUserTurnStopStrategy — minimum STT confidence to skip the
+# VAD wait and fire the LLM on a finalized sentence-final transcript. Vendors
+# that don't expose a confidence score default to 1.0 (always pass the gate).
+EARLY_TRIGGER_MIN_CONF = float(os.getenv("EARLY_TRIGGER_MIN_CONF", "0.7"))
+
 # Smart Turn probability cutoff. The v3 model's native cutoff is 0.5.
 # Lowering this makes Smart Turn more eager to call a turn COMPLETE — i.e.
 # fire the rest of the pipeline even on borderline INCOMPLETE predictions.
@@ -65,6 +70,11 @@ EARLY_BARGE_IN_WINDOW_S = float(os.getenv("EARLY_BARGE_IN_WINDOW_S", "0.8"))
 FILLER_ENABLED = os.getenv("FILLER_ENABLED", "true").lower() in ("1", "true", "yes")
 # Probability that a filler fires on any given turn. 1.0 = every turn.
 FILLER_PROBABILITY = float(os.getenv("FILLER_PROBABILITY", "1.0"))
+# Delay between VAD-stop and filler emission. VAD-stop can chatter on
+# mid-utterance pauses; waiting ~900ms before injecting lets a genuine
+# resumption (UserStartedSpeakingFrame) cancel the filler instead of
+# stepping on the caller.
+FILLER_DELAY_MS = int(os.getenv("FILLER_DELAY_MS", "900"))
 
 # ── Redis / conversation memory ─────────────────────────────────────────────
 # Schema: call:{call_id}:data → JSON list of {role, content, timestamp}
@@ -75,7 +85,7 @@ CONTEXT_EXPIRY_SECONDS = int(os.getenv("CONTEXT_EXPIRY_SECONDS", str(24 * 60 * 6
 # ── Vendor selection ────────────────────────────────────────────────────────
 # These three vars control which service is built by the factories.
 # Adding a new vendor: edit the matching factory file and add a new branch.
-LLM_VENDOR = os.getenv("LLM_VENDOR", "groq").lower()    # groq | openai | bedrock | sarvam
+LLM_VENDOR = os.getenv("LLM_VENDOR", "groq").lower()    # groq | openai | bedrock | sarvam | openrouter
 TTS_VENDOR = os.getenv("TTS_VENDOR", "sarvam").lower()  # sarvam | elevenlabs | cartesia
 STT_PRIMARY = os.getenv("STT_PRIMARY", "sarvam").lower() # sarvam | deepgram | credgenics_http
 STT_FALLBACK_CHAIN = [v.strip() for v in os.getenv(
@@ -95,6 +105,7 @@ CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", "")
 AWS_BEDROCK_REGION = os.getenv("AWS_BEDROCK_REGION", "us-east-1")
 AWS_BEDROCK_API_KEY = os.getenv("AWS_BEDROCK_API_KEY", "")
 SARVAM_LLM_API_KEY = os.getenv("SARVAM_LLM_API_KEY", SARVAM_API_KEY)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # ── Internal Credgenics HTTP STT ─────────────────────────────────────────────
 # POST {STT_BASE_URL}/transcribe with form fields: audio, current_language,

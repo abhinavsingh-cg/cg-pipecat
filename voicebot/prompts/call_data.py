@@ -28,8 +28,8 @@ DEFAULT_CALL_DATA = {
     "last_four_digit" : "2 3 4 5",
     "loan_nbfc_name" : "H D F C Bank",
     "allocation_dpd_value" : "12",
-    "date_of_default" : "2026-05-06",
-    "due_date" : "2026-05-06",
+    "date_of_default" : "2026-06-06",
+    "due_date" : "2026-06-06",
     "billed_ai_overdue_amt": "10",
     "remaining_si_emi": "62000",
     "last_4_digits_loan": "7823",
@@ -42,6 +42,7 @@ DEFAULT_CALL_DATA = {
     "language_supported": "Hindi, English, Telugu, Malayalam, Bengali, Marathi, Tamil",
     "default_language": "hindi",
     "bot_name" : "Priya",
+    "vb_product" : "two wheeler"
 }
 
 

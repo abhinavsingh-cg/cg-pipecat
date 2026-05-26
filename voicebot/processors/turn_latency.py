@@ -97,7 +97,7 @@ class TurnLatencyTracker(FrameProcessor):
             self._ms(self._shared.t_llm_start, self.t_tts_first),
             self._ms(self._shared.t_llm_end, self.t_tts_first),
             self._ms(self.t_tts_first, self.t_bot_start),
-            self._ms(self.t_user_stop, self.t_tts_first),
+            self._ms(self.t_vad_stop, self.t_bot_start),
         )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
