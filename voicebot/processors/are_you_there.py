@@ -88,14 +88,14 @@ class AreYouThereWatchdog(FrameProcessor):
             self._state.are_you_there_count = 0
             self._reset_timer()
         elif isinstance(frame, UserStoppedSpeakingFrame):
-            # User just finished — LLM is about to respond. Cancel the idle
-            # timer so the watchdog can't fire while STT+LLM+TTS is processing
-            # (which would queue "are you there?" right next to the real
-            # response and play them back-to-back). BotStartedSpeakingFrame
-            # would otherwise be the next signal, but it can arrive after
-            # ARE_YOU_THERE_TIMEOUT_S on slow turns. Timer rearms on
-            # BotStoppedSpeakingFrame once the bot's reply finishes playing.
-            self._cancel_timer()
+            # User just finished — restart the idle clock. If the bot replies
+            # before ARE_YOU_THERE_TIMEOUT_S, BotStartedSpeakingFrame will
+            # cancel the timer. If no bot speech arrives (e.g. empty transcript
+            # → LLM never called), the watchdog fires normally rather than
+            # staying dead forever. Previously this was _cancel_timer(), which
+            # caused permanent silence when a no-transcript turn produced no
+            # BotStoppedSpeakingFrame to rearm the watchdog.
+            self._reset_timer()
         elif isinstance(frame, BotStartedSpeakingFrame):
             # Don't fire "are you there?" while the bot is talking.
             self._bot_speaking = True

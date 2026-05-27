@@ -65,12 +65,15 @@ from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import (
     UserTurnStrategies,
     default_user_turn_start_strategies,
 )
 
 from voicebot.turns.early_user_stop import EarlyTranscriptionUserTurnStopStrategy
+from voicebot.turns.sarvam_turn_analyzer import SarvamTurnAnalyzerUserTurnStopStrategy
+from voicebot.turns.sarvam_vad_stop import SarvamVADUserTurnStopStrategy
 
 from voicebot.config import (
     DEFAULT_LANGUAGE,
@@ -80,7 +83,9 @@ from voicebot.config import (
     SMART_TURN_PROB_THRESHOLD,
     STT_PRIMARY,
     SUPPORTED_LANGUAGES,
+    TURN_DETECTION_MODE,
     TTS_VENDOR,
+    USER_SPEECH_TIMEOUT_MS,
     VAD_CONFIDENCE,
     VAD_MIN_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
@@ -203,6 +208,84 @@ def turn_analyzer():
     except Exception as exc:
         logger.warning("smart-turn v3 unavailable (%s) — turn detection disabled", exc)
         return None
+
+
+def build_turn_stop_strategies() -> list[BaseUserTurnStopStrategy]:
+    """
+    Build the list of user turn stop strategies based on TURN_DETECTION_MODE.
+
+    Combinations (set via .env or env var):
+
+      early_transcript  — (default) EarlyTranscriptionUserTurnStopStrategy fires the
+                          moment a confident, sentence-final transcript arrives;
+                          SpeechTimeout parent handles the VAD-silence fallback.
+
+      vad_only          — SpeechTimeoutUserTurnStopStrategy only: wait
+                          VAD_MIN_SILENCE_MS of silence then fire. No neural model,
+                          no STT confidence gate. Good baseline for latency comparison.
+
+      smart_turn        — TurnAnalyzerUserTurnStopStrategy wrapping the local Smart
+                          Turn v3 model. Neural end-of-turn classifier runs on every
+                          audio chunk; fires once the model says COMPLETE and a
+                          transcript is available. Falls back to vad_only if the model
+                          fails to load.
+
+      smart_turn_early  — Smart Turn v3 + EarlyTranscription stacked. Both strategies
+                          process every frame independently; whichever calls
+                          trigger_user_turn_stopped() first wins. In practice:
+                          confident sentence-final transcripts → EarlyTranscription
+                          fires fast; hesitant / mid-sentence pauses → Smart Turn
+                          catches the real end. Best of both worlds.
+    """
+    mode = TURN_DETECTION_MODE
+    logger.info("turn_detection | mode=%s", mode)
+
+    if mode == "vad_only":
+        # With Sarvam STT, END_SPEECH is broadcast as UserStoppedSpeakingFrame
+        # before TranscriptionFrame.finalized is ever set (Sarvam never sets it).
+        # SarvamVADUserTurnStopStrategy intercepts that frame and cancels the
+        # stt_timeout safety-net, so the turn fires on transcript arrival
+        # (~252ms) instead of waiting the full P99 stt_timeout (~878ms).
+        cls = (
+            SarvamVADUserTurnStopStrategy if STT_PRIMARY == "sarva"
+            else SpeechTimeoutUserTurnStopStrategy
+        )
+        return [cls(user_speech_timeout=USER_SPEECH_TIMEOUT_MS / 1000.0)]
+
+    if mode in ("smart_turn", "smart_turn_early"):
+        ta = turn_analyzer()
+        if ta is not None:
+            # Sarvam never sets TranscriptionFrame.finalized=True, which makes
+            # the default TurnAnalyzer wait its full stt_timeout safety-net
+            # (~370ms) even when Smart Turn already said COMPLETE. The Sarvam
+            # subclass forces finalized=True so the turn fires immediately.
+            smart_cls = (
+                SarvamTurnAnalyzerUserTurnStopStrategy if STT_PRIMARY == "sarvam"
+                else TurnAnalyzerUserTurnStopStrategy
+            )
+            smart_strategy = smart_cls(turn_analyzer=ta)
+            if mode == "smart_turn":
+                return [smart_strategy]
+            # smart_turn_early: stack both; first to fire wins
+            return [
+                smart_strategy,
+                EarlyTranscriptionUserTurnStopStrategy(
+                    user_speech_timeout=2,
+                    min_confidence=EARLY_TRIGGER_MIN_CONF,
+                ),
+            ]
+        logger.warning(
+            "turn_detection | smart_turn unavailable; falling back to early_transcript"
+        )
+        # fall through to early_transcript
+
+    # Default: early_transcript
+    return [
+        EarlyTranscriptionUserTurnStopStrategy(
+            user_speech_timeout=2,
+            min_confidence=EARLY_TRIGGER_MIN_CONF,
+        )
+    ]
 
 
 def load_lid_model(disable: bool = False):
@@ -352,16 +435,16 @@ async def build_and_run(
     #     stop_strategies = [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.01)]
     user_turn_strategies = UserTurnStrategies(
         start=default_user_turn_start_strategies(),
-        stop=[
-            EarlyTranscriptionUserTurnStopStrategy(
-                user_speech_timeout=2,
-                min_confidence=EARLY_TRIGGER_MIN_CONF,
-            )
-        ],
+        stop=build_turn_stop_strategies(),
     )
     user_params = LLMUserAggregatorParams(
         vad_analyzer=vad_analyzer(),
         user_turn_strategies=user_turn_strategies,
+        # Pipecat default is 5.0s. When Smart Turn fires COMPLETE but no STT
+        # transcript arrives (e.g. silent barge-in, STT stream reset after
+        # interruption), the stop strategies deadlock until this timeout forces
+        # UserStoppedSpeakingFrame. Shorter = less perceived silence on those turns.
+        user_turn_stop_timeout=1.5,
     )
     context_aggr = LLMContextAggregatorPair(context, user_params=user_params)
 

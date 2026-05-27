@@ -39,6 +39,17 @@ VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "100"))
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "100"))
 VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.7"))
 
+# How long the turn-stop strategy waits AFTER VADUserStoppedSpeakingFrame
+# before committing the turn (i.e. firing the LLM). This is the "rolling
+# resume window" — if the user starts speaking again within this window,
+# the timer resets. Distinct from VAD_MIN_SILENCE_MS, which is how long
+# Silero waits before declaring speech stopped in the first place.
+#
+# Total perceived silence → LLM trigger = VAD_MIN_SILENCE_MS + USER_SPEECH_TIMEOUT_MS.
+# Tune them independently — VAD tight (snappy stop detection) + this short
+# (snappy commit) is fastest. Raise this if speakers pause mid-utterance.
+USER_SPEECH_TIMEOUT_MS = int(os.getenv("USER_SPEECH_TIMEOUT_MS", "100"))
+
 # EarlyTranscriptionUserTurnStopStrategy — minimum STT confidence to skip the
 # VAD wait and fire the LLM on a finalized sentence-final transcript. Vendors
 # that don't expose a confidence score default to 1.0 (always pass the gate).
@@ -50,6 +61,19 @@ EARLY_TRIGGER_MIN_CONF = float(os.getenv("EARLY_TRIGGER_MIN_CONF", "0.7"))
 # Range: [0.0, 1.0]. 0.5 = model default, 0.3 = aggressive (fire fast),
 # 0.7 = conservative (wait for clear end-of-turn).
 SMART_TURN_PROB_THRESHOLD = float(os.getenv("SMART_TURN_PROB_THRESHOLD", "0.3"))
+
+# Turn detection strategy combination. Controls which stop strategies are
+# passed to UserTurnStrategies in pipeline.py.
+#
+#   early_transcript  — (default) fire on confident sentence-final transcript;
+#                       falls back to VAD timeout via SpeechTimeout parent class.
+#   vad_only          — pure VAD silence: SpeechTimeoutUserTurnStopStrategy only.
+#   smart_turn        — neural end-of-turn classifier (Smart Turn v3); falls back
+#                       to vad_only if the model is unavailable.
+#   smart_turn_early  — Smart Turn v3 + EarlyTranscription stacked; whichever
+#                       fires first wins (confident transcripts → early; ambiguous
+#                       pauses → Smart Turn).
+TURN_DETECTION_MODE = os.getenv("TURN_DETECTION_MODE", "smart_turn_early").lower()
 
 # ── Idle / "are you there?" ──────────────────────────────────────────────────
 # After ARE_YOU_THERE_TIMEOUT_S of silence the bot asks "are you there?".

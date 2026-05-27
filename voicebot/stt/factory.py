@@ -83,13 +83,15 @@ def build_stt(state: LanguageState) -> STTService:
         )
         _orig_broadcast = svc.broadcast_frame
         async def _tagged_broadcast(frame_cls, *args, **kwargs):
-            try:
-                if frame_cls is _UStop:
-                    _log.info("sarvam_emit | UserStoppedSpeakingFrame (END_SPEECH)")
-                elif frame_cls is _UStart:
-                    _log.info("sarvam_emit | UserStartedSpeakingFrame (START_SPEECH)")
-            except Exception:
-                pass
+            if frame_cls is _UStop:
+                # Sarvam's server-side END_SPEECH fires ~30ms after our Silero
+                # VADUserStoppedSpeakingFrame — it's redundant and pollutes the
+                # turn controller state with an extra UserStoppedSpeakingFrame
+                # before any transcript arrives. SarvamVADUserTurnStopStrategy
+                # already cancels the stt_timeout_task on VAD stop, so we don't
+                # need this signal at all.
+                _log.info("sarvam_emit | UserStoppedSpeakingFrame (END_SPEECH) [suppressed]")
+                return
             return await _orig_broadcast(frame_cls, *args, **kwargs)
         svc.broadcast_frame = _tagged_broadcast
         return svc
