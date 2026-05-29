@@ -102,6 +102,7 @@ from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
+from voicebot.processors.repeat_prompt import RepeatPromptOnFailure
 from voicebot.processors.stage_overlay import StageOverlayProcessor, StageRouterProcessor
 from voicebot.processors.stereo_recorder import StereoCallRecorder
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
@@ -586,6 +587,10 @@ async def build_and_run(
     #     procs.append(FrameTap("post-tts", include_audio=True))
 
     procs.extend([
+        # If the LLM turn errors / ends empty, or the STT reports an unsupported
+        # language, play a localized recovery prompt instead of going silent.
+        RepeatPromptOnFailure(state),
+
         # Idle watchdog: emits ARE_YOU_THERE_TEXT after ARE_YOU_THERE_TIMEOUT_S
         # of silence; hangs up after ARE_YOU_THERE_MAX_STRIKES strikes.
         AreYouThereWatchdog(state),

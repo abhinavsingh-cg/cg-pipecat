@@ -38,6 +38,7 @@ from voicebot.config import (
 @dataclass
 class LanguageState:
     current_language: str          # e.g. "hindi" — drives TTS + LLM suffix
+    last_detected_language: Optional[str] = None  # most recent STT/LID language signal
     candidate_language: Optional[str] = None   # language being tested for hysteresis
     candidate_count: int = 0       # consecutive turns detected in candidate_language
     turn_count: int = 0            # total transcript turns processed this call
@@ -85,6 +86,8 @@ class LanguageState:
     def __post_init__(self):
         if self.supported_languages is None:
             self.supported_languages = [self.current_language]
+        if self.last_detected_language is None:
+            self.last_detected_language = self.current_language
 
 
 def normalize_speechbrain_label(raw: str) -> Optional[str]:
@@ -122,6 +125,7 @@ def update_candidate(state: LanguageState, detected: str) -> bool:
     A detection of the current language resets the candidate (no switch needed).
     A detection of a *different* candidate restarts the count from 1.
     """
+    state.last_detected_language = detected
     if detected == state.current_language:
         state.candidate_language = None
         state.candidate_count = 0
