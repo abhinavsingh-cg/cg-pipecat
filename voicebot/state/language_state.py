@@ -43,10 +43,15 @@ class LanguageState:
     turn_count: int = 0            # total transcript turns processed this call
     last_switch_turn: int = 0      # turn_count at last committed switch
     call_id: str = ""
+    campaign_id: str = ""          # passed as a query param to the Credgenics HTTP STT
 
     # Languages this call is allowed to switch to (from job metadata).
     # Used by CredgenicsHTTPSTT, language suffix, and the LLM prompt.
     supported_languages: list = None
+
+    # Incremented when the Credgenics STT returns language=="invalid"; reset on a
+    # valid transcript by LanguageSuffixProcessor.
+    invalid_language_count: int = 0
 
     # ── Early-barge-in concat scratch ────────────────────────────────────────
     last_user_transcription: Optional[str] = None  # previous turn's transcript

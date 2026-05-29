@@ -132,11 +132,23 @@ SARVAM_LLM_API_KEY = os.getenv("SARVAM_LLM_API_KEY", SARVAM_API_KEY)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # ── Internal Credgenics HTTP STT ─────────────────────────────────────────────
-# POST {STT_BASE_URL}/transcribe with form fields: audio, current_language,
-# supported_languages. Response: {"transcript": "...", "language": "hindi"}.
+# POST {STT_BASE_URL}/transcribe?call_id=..&campaign_id=..&current_language=hindi
+# multipart form: file (WAV), current_language (full name), supported_languages
+# (repeated ISO). header: authenticationtoken=STT_API_KEY. Response:
+# {"transcription": "...", "language": "en"|"invalid", "latency": 0.68}.
 # Used when STT_PRIMARY=credgenics_http.
 STT_BASE_URL = os.getenv("STT_BASE_URL", "")
 STT_TIMEOUT_S = float(os.getenv("STT_TIMEOUT_S", "4"))
+STT_API_KEY = os.getenv("STT_API_KEY", "")
+# campaign_id query param for the STT. (Production passes this via call metadata;
+# the local harness has no call_data, so it comes from the env for testing.)
+STT_CAMPAIGN_ID = os.getenv("STT_CAMPAIGN_ID", "")
+
+# ── Stereo call recording (debug) ────────────────────────────────────────────
+# When enabled, the whole call is dumped to a stereo WAV: borrower audio in the
+# LEFT channel, bot audio in the RIGHT. File: {CALL_RECORDING_DIR}/{call_id}.wav.
+CALL_RECORDING_ENABLED = os.getenv("CALL_RECORDING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+CALL_RECORDING_DIR = os.getenv("CALL_RECORDING_DIR", "/Users/admin/Desktop/08_Projects_Group/CODES/pipecat-voicebot/voicebot/cg-pipecat_latest/cg-pipecat/call-recordings-our-stt")
 
 # ── LLM model + retries ─────────────────────────────────────────────────────
 # LLM_MODEL is passed as-is to the vendor service. Groq default is the 70B

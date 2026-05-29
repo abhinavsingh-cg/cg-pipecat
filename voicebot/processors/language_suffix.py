@@ -26,13 +26,19 @@ CUSTOMIZE:
 from __future__ import annotations
 
 import logging
+import string
 from typing import Callable, Optional
 
 from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transcriptions.language import Language as PipecatLanguage
 
-from voicebot.config import LANG_SWITCH_THRESHOLD, LANG_TO_ISO, SUPPORTED_LNG_SUFFIX
+from voicebot.config import (
+    LANG_SWITCH_THRESHOLD,
+    LANG_TO_ISO,
+    STT_PRIMARY,
+    SUPPORTED_LNG_SUFFIX,
+)
 from voicebot.state.language_state import (
     LanguageState,
     commit_switch,
@@ -41,6 +47,17 @@ from voicebot.state.language_state import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_single_word_repeated(text: str, threshold: int = 5) -> bool:
+    """Return True if text is a single word repeated >= threshold times.
+
+    Guards against the Credgenics STT occasionally returning a hallucinated
+    repetition (e.g. "हाँ हाँ हाँ हाँ हाँ") for noise/silence.
+    """
+    words = text.split()
+    clean_words = [w.lower().strip(string.punctuation) for w in words]
+    return len(set(clean_words)) == 1 and len(clean_words) >= threshold
 
 
 class LanguageSuffixProcessor(FrameProcessor):
@@ -112,6 +129,15 @@ class LanguageSuffixProcessor(FrameProcessor):
             s.turn_count,
         )
         t_after_log = time.perf_counter()
+
+        # A valid transcript clears the Credgenics STT invalid-language strikes.
+        s.invalid_language_count = 0
+
+        # Single-word repetition (Credgenics STT noise artifact): don't vote on
+        # language or inject a suffix for it.
+        if STT_PRIMARY in ("credgenics", "credgenics_http") and _is_single_word_repeated(frame.text.strip()):
+            logger.info("single_word_repetition | text=%r | skipping language logic", frame.text)
+            return
 
         # Short utterances (≤3 words) are unreliable for language detection —
         # both STT and text-level LID frequently misclassify them on Hinglish

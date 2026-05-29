@@ -76,11 +76,13 @@ from voicebot.turns.sarvam_turn_analyzer import SarvamTurnAnalyzerUserTurnStopSt
 from voicebot.turns.sarvam_vad_stop import SarvamVADUserTurnStopStrategy
 
 from voicebot.config import (
+    CALL_RECORDING_ENABLED,
     DEFAULT_LANGUAGE,
     EARLY_TRIGGER_MIN_CONF,
     LANG_TO_ISO,
     SAMPLE_RATE,
     SMART_TURN_PROB_THRESHOLD,
+    STT_CAMPAIGN_ID,
     STT_PRIMARY,
     SUPPORTED_LANGUAGES,
     TURN_DETECTION_MODE,
@@ -101,6 +103,7 @@ from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
 from voicebot.processors.stage_overlay import StageOverlayProcessor, StageRouterProcessor
+from voicebot.processors.stereo_recorder import StereoCallRecorder
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
 from voicebot.processors.turn_latency import LLMTimingProbe, TurnLatencyTracker, _Shared as _LatencyShared
 from voicebot.prompts.call_data import (
@@ -324,6 +327,7 @@ async def build_and_run(
     state = LanguageState(
         current_language=DEFAULT_LANGUAGE,
         call_id=call_id,
+        campaign_id=STT_CAMPAIGN_ID,
         supported_languages=list(SUPPORTED_LANGUAGES),
     )
 
@@ -365,6 +369,9 @@ async def build_and_run(
     stt = build_stt(state)
     llm = build_llm()
     tts = build_tts(state.current_language)
+
+    # Optional debug recorder: borrower on the left channel, bot on the right.
+    recorder = StereoCallRecorder(call_id, sample_rate=SAMPLE_RATE) if CALL_RECORDING_ENABLED else None
 
     # SpeechBrain LID runs as a FrameProcessor before STT (optional).
     lid_proc = LIDProcessor(state, lid_model, sample_rate=SAMPLE_RATE) if lid_model else None
@@ -433,9 +440,19 @@ async def build_and_run(
     #     # VADUserStoppedSpeakingFrame (gated on at least one transcript) —
     #     # no neural classifier, no multi-second confirmation window.
     #     stop_strategies = [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.01)]
+    # Non-streaming Credgenics STT doesn't emit per-transcript confidence, so the
+    # EarlyTranscription / SmartTurn strategies can't gate on it. Use the
+    # transcript-aware SpeechTimeout strategy instead: it fires once this STT's
+    # finalized transcript arrives after VAD stop (plus a short floor).
+    if STT_PRIMARY in ("credgenics", "credgenics_http"):
+        stop_strategies = [
+            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=USER_SPEECH_TIMEOUT_MS / 1000.0)
+        ]
+    else:
+        stop_strategies = build_turn_stop_strategies()
     user_turn_strategies = UserTurnStrategies(
         start=default_user_turn_start_strategies(),
-        stop=build_turn_stop_strategies(),
+        stop=stop_strategies,
     )
     user_params = LLMUserAggregatorParams(
         vad_analyzer=vad_analyzer(),
@@ -460,6 +477,9 @@ async def build_and_run(
     # TO ADD A STEP: instantiate your FrameProcessor and insert it at the right
     # position below. Common insertion points are marked with comments.
     procs = [transport.input(), EventLogger("input")]
+    if recorder is not None:
+        # Capture borrower audio straight off the wire (left channel).
+        procs.insert(1, recorder.user_tap)
 
     # if debug_frames:
     #     # FrameTap logs every non-audio frame name at this pipeline stage.
@@ -558,6 +578,10 @@ async def build_and_run(
         # (e.g. audio normalization, logging playback duration)
     ])
 
+    if recorder is not None:
+        # Capture synthesized bot audio right after TTS (right channel).
+        procs.insert(procs.index(tts) + 1, recorder.bot_tap)
+
     # if debug_frames:
     #     procs.append(FrameTap("post-tts", include_audio=True))
 
@@ -624,4 +648,6 @@ async def build_and_run(
     try:
         await runner.run(task)
     finally:
+        if recorder is not None:
+            recorder.finalize()
         await memory.close()
