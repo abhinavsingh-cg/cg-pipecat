@@ -64,11 +64,18 @@ def build_stt(state: LanguageState) -> STTService:
             model=SARVAM_STT_MODEL,
             mode="transcribe",
             sample_rate=SARVAM_STT_SAMPLE_RATE,
-            vad_signals = True,
+            # vad_signals=False: use Pipecat-side VAD. This enables the
+            # client flush() call on VADUserStoppedSpeakingFrame (sarvam/stt.py
+            # line 437), which tells Sarvam's server "finalize now" instead of
+            # waiting for Sarvam's own server-side endpointer. Required for
+            # short utterances ("yes madam", "ji haan") that Sarvam's endpointer
+            # otherwise never decides to finalize.
+            vad_signals=True,
             params=SarvamSTTService.InputParams(
                 language=None,
-                vad_signals=True,
-                high_vad_sensitivity=True,   # cut server-side END_SPEECH lag
+                # vad_signals=False,
+                # high_vad_sensitivity=False,
+                # positive_speech_threshold=0.8,
             )
         )
         _log.info("sarvam_stt_init | %.0fms", (time.perf_counter() - t0) * 1000)

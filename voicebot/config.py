@@ -39,6 +39,12 @@ VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "100"))
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "100"))
 VAD_CONFIDENCE = float(os.getenv("VAD_CONFIDENCE", "0.7"))
 
+# Noise-floor gate stacked on top of Silero. Chunks whose RMS is below this
+# dBFS threshold are forced to confidence 0.0, suppressing barge-in on
+# background noise / far-field cross-talk. Near-field caller speech typically
+# lands at -20 to -30 dBFS; TV / family voices at the room scale ~-35 to -45.
+RMS_FLOOR_DBFS = float(os.getenv("RMS_FLOOR_DBFS", "-35.0"))
+
 # How long the turn-stop strategy waits AFTER VADUserStoppedSpeakingFrame
 # before committing the turn (i.e. firing the LLM). This is the "rolling
 # resume window" — if the user starts speaking again within this window,
@@ -73,7 +79,7 @@ SMART_TURN_PROB_THRESHOLD = float(os.getenv("SMART_TURN_PROB_THRESHOLD", "0.3"))
 #   smart_turn_early  — Smart Turn v3 + EarlyTranscription stacked; whichever
 #                       fires first wins (confident transcripts → early; ambiguous
 #                       pauses → Smart Turn).
-TURN_DETECTION_MODE = os.getenv("TURN_DETECTION_MODE", "smart_turn_early").lower()
+TURN_DETECTION_MODE = os.getenv("TURN_DETECTION_MODE", "vad_only").lower()
 
 # ── Idle / "are you there?" ──────────────────────────────────────────────────
 # After ARE_YOU_THERE_TIMEOUT_S of silence the bot asks "are you there?".

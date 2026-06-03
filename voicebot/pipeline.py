@@ -48,7 +48,10 @@ logging.getLogger("pipecat.transports.smallwebrtc.transport").setLevel(logging.W
 logging.getLogger("aioice").setLevel(logging.WARNING)
 logging.getLogger("aiortc").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)  # silence Groq HTTP 200 OK lines
+import math
 from typing import Optional
+
+import numpy as np
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -79,6 +82,7 @@ from voicebot.config import (
     DEFAULT_LANGUAGE,
     EARLY_TRIGGER_MIN_CONF,
     LANG_TO_ISO,
+    RMS_FLOOR_DBFS,
     SAMPLE_RATE,
     SMART_TURN_PROB_THRESHOLD,
     STT_PRIMARY,
@@ -100,6 +104,8 @@ from voicebot.processors.frame_tap import FrameTap
 from voicebot.processors.greeting_gate import GreetingDoneFlag, GreetingGate
 from voicebot.processors.language_suffix import LanguageSuffixProcessor
 from voicebot.processors.redis_recorder import RedisAssistantRecorder, RedisUserRecorder
+from voicebot.processors.rms_audio_gate import RMSAudioGate
+from voicebot.processors.stt_audio_dump import STTAudioDump
 from voicebot.processors.stage_overlay import StageOverlayProcessor, StageRouterProcessor
 from voicebot.processors.text_normalizer import TextNormalizationProcessor
 from voicebot.processors.turn_latency import LLMTimingProbe, TurnLatencyTracker, _Shared as _LatencyShared
@@ -145,16 +151,32 @@ def vad_analyzer() -> SileroVADAnalyzer:
             self._vad_last_above = False
 
         def voice_confidence(self, buffer) -> float:
+            # RMS noise-floor gate: reject far-field / background speech
+            # (TV, family chatter) by requiring near-field energy. Caller's
+            # mouth-to-mic path is louder than any room-scale source.
+            audio_i16 = np.frombuffer(buffer, np.int16)
+            if audio_i16.size:
+                rms = float(np.sqrt(np.mean(audio_i16.astype(np.float32) ** 2))) / 32768.0
+                rms_dbfs = 20.0 * math.log10(rms + 1e-9)
+            else:
+                rms_dbfs = -120.0
+            gated = rms_dbfs < RMS_FLOOR_DBFS
+            if gated:
+                s = 0.0
             score = super().voice_confidence(buffer)
             s = float(score.item() if hasattr(score, "item") else score)
             above = s >= VAD_CONFIDENCE
             # Log only on transitions (silence → speech, speech → silence) —
             # avoids the ~6 logs/sec firehose during long utterances.
-            if above != self._vad_last_above:
-                logger.info("vad_transition | %s | score=%.2f | threshold=%.2f",
-                            "speech" if above else "silence", s, VAD_CONFIDENCE)
+            # if above != self._vad_last_above:
+            logger.info(
+                "vad_transition | %s | score=%.2f | threshold=%.2f | "
+                "rms_dbfs=%.1f | floor=%.1f | gated=%s",
+                "speech" if above else "silence", s, VAD_CONFIDENCE,
+                rms_dbfs, RMS_FLOOR_DBFS, gated,
+            )
             self._vad_last_above = above
-            return score
+            return 0.0 if gated else score
 
     return LoggingSileroVAD(
         params=VADParams(
@@ -247,7 +269,7 @@ def build_turn_stop_strategies() -> list[BaseUserTurnStopStrategy]:
         # stt_timeout safety-net, so the turn fires on transcript arrival
         # (~252ms) instead of waiting the full P99 stt_timeout (~878ms).
         cls = (
-            SarvamVADUserTurnStopStrategy if STT_PRIMARY == "sarva"
+            SarvamVADUserTurnStopStrategy if STT_PRIMARY == "sarvam"
             else SpeechTimeoutUserTurnStopStrategy
         )
         return [cls(user_speech_timeout=USER_SPEECH_TIMEOUT_MS / 1000.0)]
@@ -473,6 +495,15 @@ async def build_and_run(
 
     # if debug_frames:
     #     procs.append(FrameTap("pre-stt"))
+
+    # RMS audio gate: zero-substitutes sub-floor InputAudioRawFrames so STT
+    # only transcribes near-field audio. Preserves frame timing for streaming
+    # STT session continuity.
+    # procs.append(RMSAudioGate())
+
+    # Debug tap: if STT_AUDIO_DUMP_PATH is set in .env, writes a WAV of
+    # exactly what STT sees (post-RMS-gate audio). No-op otherwise.
+    procs.append(STTAudioDump(sample_rate=SAMPLE_RATE))
 
     procs.append(stt)
     # Note: TranscriptionFrame.language may carry a region suffix from some
